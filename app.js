@@ -56,7 +56,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function checkAuth() {
     try {
-        const { data: { session } } = await supabaseClientClient.auth.getSession();
+        const { data: { session } } = await supabaseClient.auth.getSession();
         
         if (session) {
             currentUser = session.user;
@@ -121,7 +121,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     errorEl.classList.remove('show');
     
     try {
-        const { data, error } = await supabaseClientClient.auth.signInWithPassword({
+        const { data, error } = await supabaseClient.auth.signInWithPassword({
             email,
             password
         });
@@ -150,7 +150,7 @@ function getErrorMessage(error) {
 
 async function logout() {
     showLoading();
-    await supabaseClientClient.auth.signOut();
+    await supabaseClient.auth.signOut();
     closeModal();
 }
 
@@ -1623,10 +1623,10 @@ async function saveFornecedor(id) {
     
     try {
         if (id) {
-            const { error } = await supabaseClientClient.from('fornecedores').update(data).eq('id', id);
+            const { error } = await supabaseClient.from('fornecedores').update(data).eq('id', id);
             if (error) throw error;
         } else {
-            const { error } = await supabaseClientClient.from('fornecedores').insert(data);
+            const { error } = await supabaseClient.from('fornecedores').insert(data);
             if (error) throw error;
         }
         
