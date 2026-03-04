@@ -7,7 +7,7 @@ const SUPABASE_URL = 'https://egtbnjpbnafaeajypmtz.supabaseClient.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVndGJuanBibmFmYWVhanlwbXR6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1NTUzNzcsImV4cCI6MjA4ODEzMTM3N30.Yb9ERrPpAQOy8cuPFmEEB7zZALR6Zjt1J_psPAcpgMM';
 
 // Inicializar Supabase
-const supabaseClient = window.supabaseClient.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ============================================
 // ESTADO GLOBAL
