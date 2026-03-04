@@ -56,7 +56,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function checkAuth() {
     try {
-        const { data: { session } } = await supabaseClient.auth.getSession();
+        const { data: { session } } = await supabaseClientClient.auth.getSession();
         
         if (session) {
             currentUser = session.user;
@@ -121,7 +121,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     errorEl.classList.remove('show');
     
     try {
-        const { data, error } = await supabaseClient.auth.signInWithPassword({
+        const { data, error } = await supabaseClientClient.auth.signInWithPassword({
             email,
             password
         });
@@ -150,7 +150,7 @@ function getErrorMessage(error) {
 
 async function logout() {
     showLoading();
-    await supabaseClient.auth.signOut();
+    await supabaseClientClient.auth.signOut();
     closeModal();
 }
 
@@ -159,7 +159,7 @@ async function logout() {
 // ============================================
 async function loadUserProfile() {
     try {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseClient
             .from('profiles')
             .select('*')
             .eq('id', currentUser.id)
@@ -217,7 +217,7 @@ function updateUserUI() {
 
 async function loadCategorias() {
     try {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseClient
             .from('categorias')
             .select('*')
             .eq('ativo', true)
@@ -232,7 +232,7 @@ async function loadCategorias() {
 
 async function loadProdutos() {
     try {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseClient
             .from('produtos')
             .select(`
                 *,
@@ -251,7 +251,7 @@ async function loadProdutos() {
 
 async function loadAlertas() {
     try {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseClient
             .from('alertas')
             .select(`
                 *,
@@ -269,7 +269,7 @@ async function loadAlertas() {
 
 async function loadSugestoes() {
     try {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseClient
             .from('sugestoes')
             .select(`
                 *,
@@ -287,7 +287,7 @@ async function loadSugestoes() {
 
 async function loadMovimentacoes() {
     try {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseClient
             .from('movimentacoes')
             .select(`
                 *,
@@ -306,7 +306,7 @@ async function loadMovimentacoes() {
 
 async function loadFornecedores() {
     try {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseClient
             .from('fornecedores')
             .select('*')
             .eq('ativo', true)
@@ -321,7 +321,7 @@ async function loadFornecedores() {
 
 async function loadAvaliacoes() {
     try {
-        const { data, error } = await supabase
+        const { data, error } = await supabaseClient
             .from('avaliacoes')
             .select('*')
             .eq('user_id', currentUser.id);
@@ -447,7 +447,7 @@ async function renderHome() {
     const hoje = new Date().toISOString().split('T')[0];
     
     // Buscar consumo de hoje
-    const { data: consumoHoje } = await supabase
+    const { data: consumoHoje } = await supabaseClient
         .from('movimentacoes')
         .select('quantidade')
         .eq('tipo', 'saida')
@@ -459,7 +459,7 @@ async function renderHome() {
     const alertasPendentes = cache.alertas.filter(a => !a.resolvido).length;
     
     // Buscar últimas movimentações
-    const { data: ultimas } = await supabase
+    const { data: ultimas } = await supabaseClient
         .from('movimentacoes')
         .select(`
             *,
@@ -796,7 +796,7 @@ function renderSugestaoItem(s, showActions) {
 
 async function respondSugestao(id, status) {
     try {
-        const { error } = await supabase
+        const { error } = await supabaseClient
             .from('sugestoes')
             .update({
                 status,
@@ -886,7 +886,7 @@ function renderAlertaItem(a, showActions) {
 
 async function resolveAlerta(id) {
     try {
-        const { error } = await supabase
+        const { error } = await supabaseClient
             .from('alertas')
             .update({
                 resolvido: true,
@@ -1295,7 +1295,7 @@ async function confirmConsume() {
     if (!selectedProduct) return;
     
     try {
-        const { error } = await supabase
+        const { error } = await supabaseClient
             .from('movimentacoes')
             .insert({
                 produto_id: selectedProduct.id,
@@ -1330,7 +1330,7 @@ async function quickConsume(productId) {
     }
     
     try {
-        const { error } = await supabase
+        const { error } = await supabaseClient
             .from('movimentacoes')
             .insert({
                 produto_id: productId,
@@ -1404,7 +1404,7 @@ async function confirmEntrada() {
     const obs = document.getElementById('entrada-obs')?.value || '';
     
     try {
-        const { error } = await supabase
+        const { error } = await supabaseClient
             .from('movimentacoes')
             .insert({
                 produto_id: selectedProduct.id,
@@ -1473,7 +1473,7 @@ async function submitSugestao() {
     }
     
     try {
-        const { error } = await supabase
+        const { error } = await supabaseClient
             .from('sugestoes')
             .insert({
                 nome,
@@ -1542,7 +1542,7 @@ async function submitAlerta() {
     }
     
     try {
-        const { error } = await supabase
+        const { error } = await supabaseClient
             .from('alertas')
             .insert({
                 produto_id: produto || null,
@@ -1623,10 +1623,10 @@ async function saveFornecedor(id) {
     
     try {
         if (id) {
-            const { error } = await supabaseClient.from('fornecedores').update(data).eq('id', id);
+            const { error } = await supabaseClientClient.from('fornecedores').update(data).eq('id', id);
             if (error) throw error;
         } else {
-            const { error } = await supabaseClient.from('fornecedores').insert(data);
+            const { error } = await supabaseClientClient.from('fornecedores').insert(data);
             if (error) throw error;
         }
         
@@ -1670,7 +1670,7 @@ async function rateProduct(productId, tipo) {
         
         if (current === tipo) {
             // Remover avaliação
-            const { error } = await supabase
+            const { error } = await supabaseClient
                 .from('avaliacoes')
                 .delete()
                 .eq('produto_id', productId)
@@ -1680,7 +1680,7 @@ async function rateProduct(productId, tipo) {
             delete cache.avaliacoes[productId];
         } else {
             // Upsert avaliação
-            const { error } = await supabase
+            const { error } = await supabaseClient
                 .from('avaliacoes')
                 .upsert({
                     produto_id: productId,
