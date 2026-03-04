@@ -3,11 +3,11 @@
 // ============================================
 
 // Configuração do Supabase
-const SUPABASE_URL = 'https://egtbnjpbnafaeajypmtz.supabase.co';
+const SUPABASE_URL = 'https://egtbnjpbnafaeajypmtz.supabaseClient.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVndGJuanBibmFmYWVhanlwbXR6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1NTUzNzcsImV4cCI6MjA4ODEzMTM3N30.Yb9ERrPpAQOy8cuPFmEEB7zZALR6Zjt1J_psPAcpgMM';
 
 // Inicializar Supabase
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const supabaseClient = window.supabaseClient.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // ============================================
 // ESTADO GLOBAL
@@ -56,7 +56,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 async function checkAuth() {
     try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const { data: { session } } = await supabaseClient.auth.getSession();
         
         if (session) {
             currentUser = session.user;
@@ -72,7 +72,7 @@ async function checkAuth() {
 }
 
 // Listener para mudanças de autenticação
-supabase.auth.onAuthStateChange(async (event, session) => {
+supabaseClient.auth.onAuthStateChange(async (event, session) => {
     if (event === 'SIGNED_IN' && session) {
         currentUser = session.user;
         await loadUserProfile();
@@ -121,7 +121,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
     errorEl.classList.remove('show');
     
     try {
-        const { data, error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabaseClient.auth.signInWithPassword({
             email,
             password
         });
@@ -150,7 +150,7 @@ function getErrorMessage(error) {
 
 async function logout() {
     showLoading();
-    await supabase.auth.signOut();
+    await supabaseClient.auth.signOut();
     closeModal();
 }
 
@@ -1623,10 +1623,10 @@ async function saveFornecedor(id) {
     
     try {
         if (id) {
-            const { error } = await supabase.from('fornecedores').update(data).eq('id', id);
+            const { error } = await supabaseClient.from('fornecedores').update(data).eq('id', id);
             if (error) throw error;
         } else {
-            const { error } = await supabase.from('fornecedores').insert(data);
+            const { error } = await supabaseClient.from('fornecedores').insert(data);
             if (error) throw error;
         }
         
