@@ -1990,5 +1990,293 @@ if ('serviceWorker' in navigator) {
             .then(reg => console.log('SW registrado'))
             .catch(err => console.log('SW erro:', err));
     });
+   }
+
+// ============================================
+// CADASTRO DE PRODUTOS (ADMIN)
+// ============================================
+function renderCadastroProduto() {
+    if (currentProfile?.role !== 'admin') {
+        return `
+            <div class="empty-state">
+                <div class="icon">🔒</div>
+                <h3>Acesso Restrito</h3>
+                <p>Apenas administradores podem cadastrar produtos.</p>
+            </div>
+        `;
+    }
+    
+    return `
+        <div class="page-header">
+            <div class="page-title">Cadastrar Produto</div>
+            <div class="page-subtitle">Adicione novos produtos ao estoque</div>
+        </div>
+        
+        <div class="card">
+            <div class="card-title">📦 Novo Produto</div>
+            
+            <div class="form-group">
+                <label>Nome do Produto *</label>
+                <input type="text" id="prod-nome" class="form-input" placeholder="Ex: Caneta Azul">
+            </div>
+            
+            <div class="form-group">
+                <label>Ícone (emoji)</label>
+                <input type="text" id="prod-icone" class="form-input" placeholder="📦" value="📦" maxlength="2">
+            </div>
+            
+            <div class="form-group">
+                <label>Categoria *</label>
+                <select id="prod-categoria" class="form-input">
+                    <option value="">Selecione...</option>
+                    ${cache.categorias.map(c => `<option value="${c.id}">${c.icone} ${c.nome}</option>`).join('')}
+                </select>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div class="form-group">
+                    <label>Estoque Inicial *</label>
+                    <input type="number" id="prod-estoque" class="form-input" placeholder="0" min="0" value="0">
+                </div>
+                
+                <div class="form-group">
+                    <label>Estoque Mínimo *</label>
+                    <input type="number" id="prod-minimo" class="form-input" placeholder="10" min="1" value="10">
+                </div>
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                <div class="form-group">
+                    <label>Unidade</label>
+                    <select id="prod-unidade" class="form-input">
+                        <option value="un">Unidade (un)</option>
+                        <option value="cx">Caixa (cx)</option>
+                        <option value="pct">Pacote (pct)</option>
+                        <option value="kg">Quilograma (kg)</option>
+                        <option value="lt">Litro (lt)</option>
+                        <option value="mt">Metro (mt)</option>
+                        <option value="rl">Rolo (rl)</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label>Consumo Diário Estimado</label>
+                    <input type="number" id="prod-consumo" class="form-input" placeholder="1" min="0" step="0.1" value="1">
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>Descrição (opcional)</label>
+                <input type="text" id="prod-descricao" class="form-input" placeholder="Detalhes do produto...">
+            </div>
+            
+            <button class="btn btn-primary" onclick="salvarProduto()">
+                ➕ Cadastrar Produto
+            </button>
+        </div>
+        
+        <div class="card">
+            <div class="card-title">📋 Produtos Cadastrados</div>
+            <p style="color: var(--gray-500); margin-bottom: 16px;">
+                ${cache.produtos.length} produtos no sistema
+            </p>
+            
+            ${cache.produtos.slice(0, 10).map(p => `
+                <div class="list-item" onclick="openEditProdutoModal(${p.id})">
+                    <div class="list-item-icon">${p.icone}</div>
+                    <div class="list-item-content">
+                        <div class="list-item-title">${p.nome}</div>
+                        <div class="list-item-subtitle">${p.categorias?.nome || 'Sem categoria'} • ${p.estoque} ${p.unidade}</div>
+                    </div>
+                    <div class="list-item-right">
+                        <button class="btn btn-secondary btn-sm">✏️ Editar</button>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+async function salvarProduto() {
+    const nome = document.getElementById('prod-nome').value.trim();
+    const icone = document.getElementById('prod-icone').value.trim() || '📦';
+    const categoria = document.getElementById('prod-categoria').value;
+    const estoque = parseInt(document.getElementById('prod-estoque').value) || 0;
+    const minimo = parseInt(document.getElementById('prod-minimo').value) || 10;
+    const unidade = document.getElementById('prod-unidade').value;
+    const consumo = parseFloat(document.getElementById('prod-consumo').value) || 1;
+    const descricao = document.getElementById('prod-descricao').value.trim();
+    
+    if (!nome) {
+        showToast('Digite o nome do produto', 'error');
+        return;
+    }
+    
+    if (!categoria) {
+        showToast('Selecione uma categoria', 'error');
+        return;
+    }
+    
+    try {
+        const { data, error } = await supabaseClient
+            .from('produtos')
+            .insert({
+                nome,
+                icone,
+                categoria_id: parseInt(categoria),
+                estoque,
+                estoque_minimo: minimo,
+                unidade,
+                consumo_diario: consumo,
+                descricao,
+                ativo: true
+            })
+            .select()
+            .single();
+        
+        if (error) throw error;
+        
+        showToast('Produto cadastrado com sucesso!', 'success');
+        
+        // Atualizar cache
+        await loadProdutos();
+        
+        // Limpar formulário
+        document.getElementById('prod-nome').value = '';
+        document.getElementById('prod-icone').value = '📦';
+        document.getElementById('prod-categoria').value = '';
+        document.getElementById('prod-estoque').value = '0';
+        document.getElementById('prod-minimo').value = '10';
+        document.getElementById('prod-consumo').value = '1';
+        document.getElementById('prod-descricao').value = '';
+        
+        renderPage();
+        
+    } catch (error) {
+        console.error('Erro ao cadastrar produto:', error);
+        showToast('Erro ao cadastrar produto', 'error');
+    }
+}
+
+function openEditProdutoModal(produtoId) {
+    const produto = cache.produtos.find(p => p.id === produtoId);
+    if (!produto) return;
+    
+    const body = `
+        <div class="form-group">
+            <label>Nome do Produto *</label>
+            <input type="text" id="edit-prod-nome" class="form-input" value="${produto.nome}">
+        </div>
+        
+        <div class="form-group">
+            <label>Ícone (emoji)</label>
+            <input type="text" id="edit-prod-icone" class="form-input" value="${produto.icone}" maxlength="2">
+        </div>
+        
+        <div class="form-group">
+            <label>Categoria</label>
+            <select id="edit-prod-categoria" class="form-input">
+                ${cache.categorias.map(c => `
+                    <option value="${c.id}" ${c.id === produto.categoria_id ? 'selected' : ''}>
+                        ${c.icone} ${c.nome}
+                    </option>
+                `).join('')}
+            </select>
+        </div>
+        
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+            <div class="form-group">
+                <label>Estoque Mínimo</label>
+                <input type="number" id="edit-prod-minimo" class="form-input" value="${produto.estoque_minimo}" min="1">
+            </div>
+            
+            <div class="form-group">
+                <label>Consumo Diário</label>
+                <input type="number" id="edit-prod-consumo" class="form-input" value="${produto.consumo_diario || 1}" step="0.1">
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label>Unidade</label>
+            <select id="edit-prod-unidade" class="form-input">
+                <option value="un" ${produto.unidade === 'un' ? 'selected' : ''}>Unidade (un)</option>
+                <option value="cx" ${produto.unidade === 'cx' ? 'selected' : ''}>Caixa (cx)</option>
+                <option value="pct" ${produto.unidade === 'pct' ? 'selected' : ''}>Pacote (pct)</option>
+                <option value="kg" ${produto.unidade === 'kg' ? 'selected' : ''}>Quilograma (kg)</option>
+                <option value="lt" ${produto.unidade === 'lt' ? 'selected' : ''}>Litro (lt)</option>
+            </select>
+        </div>
+    `;
+    
+    const footer = `
+        <button class="btn btn-danger" onclick="desativarProduto(${produtoId})">🗑️ Desativar</button>
+        <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="atualizarProduto(${produtoId})">Salvar</button>
+    `;
+    
+    openModal('Editar Produto', body, footer);
+}
+
+async function atualizarProduto(produtoId) {
+    const nome = document.getElementById('edit-prod-nome').value.trim();
+    const icone = document.getElementById('edit-prod-icone').value.trim();
+    const categoria = document.getElementById('edit-prod-categoria').value;
+    const minimo = parseInt(document.getElementById('edit-prod-minimo').value);
+    const consumo = parseFloat(document.getElementById('edit-prod-consumo').value);
+    const unidade = document.getElementById('edit-prod-unidade').value;
+    
+    if (!nome) {
+        showToast('Digite o nome do produto', 'error');
+        return;
+    }
+    
+    try {
+        const { error } = await supabaseClient
+            .from('produtos')
+            .update({
+                nome,
+                icone,
+                categoria_id: parseInt(categoria),
+                estoque_minimo: minimo,
+                consumo_diario: consumo,
+                unidade
+            })
+            .eq('id', produtoId);
+        
+        if (error) throw error;
+        
+        showToast('Produto atualizado!', 'success');
+        closeModal();
+        await loadProdutos();
+        renderPage();
+        
+    } catch (error) {
+        console.error('Erro:', error);
+        showToast('Erro ao atualizar produto', 'error');
+    }
+}
+
+async function desativarProduto(produtoId) {
+    if (!confirm('Deseja realmente desativar este produto?')) return;
+    
+    try {
+        const { error } = await supabaseClient
+            .from('produtos')
+            .update({ ativo: false })
+            .eq('id', produtoId);
+        
+        if (error) throw error;
+        
+        showToast('Produto desativado', 'success');
+        closeModal();
+        await loadProdutos();
+        renderPage();
+        
+    } catch (error) {
+        console.error('Erro:', error);
+        showToast('Erro ao desativar produto', 'error');
+    }
+}
+
 }
 
