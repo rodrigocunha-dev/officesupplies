@@ -2065,11 +2065,6 @@ function renderCadastroProduto() {
                 </div>
             </div>
             
-            <div class="form-group">
-                <label>Descrição (opcional)</label>
-                <input type="text" id="prod-descricao" class="form-input" placeholder="Detalhes do produto...">
-            </div>
-            
             <button class="btn btn-primary" onclick="salvarProduto()">
                 ➕ Cadastrar Produto
             </button>
@@ -2105,7 +2100,6 @@ async function salvarProduto() {
     const minimo = parseInt(document.getElementById('prod-minimo').value) || 10;
     const unidade = document.getElementById('prod-unidade').value;
     const consumo = parseFloat(document.getElementById('prod-consumo').value) || 1;
-    const descricao = document.getElementById('prod-descricao').value.trim();
     
     if (!nome) {
         showToast('Digite o nome do produto', 'error');
@@ -2128,7 +2122,6 @@ async function salvarProduto() {
                 estoque_minimo: minimo,
                 unidade,
                 consumo_diario: consumo,
-                descricao,
                 ativo: true
             })
             .select()
@@ -2148,7 +2141,6 @@ async function salvarProduto() {
         document.getElementById('prod-estoque').value = '0';
         document.getElementById('prod-minimo').value = '10';
         document.getElementById('prod-consumo').value = '1';
-        document.getElementById('prod-descricao').value = '';
         
         renderPage();
         
@@ -2285,13 +2277,14 @@ async function loadColaboradores() {
     try {
         const { data, error } = await supabaseClient
             .from('profiles')
-            .select('*')
+            .select('id, nome, email, role, ativo, avatar_url, created_at, updated_at')
             .order('nome');
         
         if (error) throw error;
         cache.colaboradores = data || [];
     } catch (error) {
         console.error('Erro ao carregar colaboradores:', error);
+        cache.colaboradores = [];
     }
 }
 
@@ -2337,9 +2330,7 @@ function renderColaboradores() {
                     </div>
                     <div class="list-item-content">
                         <div class="list-item-title">${c.nome || 'Sem nome'}</div>
-                        <div class="list-item-subtitle">
-                            ${c.email || ''} ${c.setor ? '• ' + c.setor : ''}
-                        </div>
+                        <div class="list-item-subtitle">${c.email || ''}</div>
                     </div>
                     <div class="list-item-right">
                         <span class="badge ${c.role === 'admin' ? 'badge-info' : 'badge-success'}">
