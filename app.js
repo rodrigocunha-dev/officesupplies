@@ -2568,5 +2568,3 @@ async function atualizarColaborador(colabId) {
     }
 }
 
-}
-
