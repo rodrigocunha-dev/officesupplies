@@ -44,7 +44,9 @@ const PAGE_TITLES = {
     fornecedores: 'Fornecedores',
     compras: 'Lista de Compras',
     relatorios: 'Relatórios',
-    mais: 'Mais Opções'
+    mais: 'Mais Opções',
+    'cadastro-produto': 'Cadastrar Produto',
+    'colaboradores': 'Colaboradores'
 };
 
 // ============================================
