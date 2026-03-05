@@ -2278,5 +2278,295 @@ async function desativarProduto(produtoId) {
     }
 }
 
+// ============================================
+// GERENCIAMENTO DE COLABORADORES (ADMIN)
+// ============================================
+async function loadColaboradores() {
+    try {
+        const { data, error } = await supabaseClient
+            .from('profiles')
+            .select('*')
+            .order('nome');
+        
+        if (error) throw error;
+        cache.colaboradores = data || [];
+    } catch (error) {
+        console.error('Erro ao carregar colaboradores:', error);
+    }
+}
+
+function renderColaboradores() {
+    if (currentProfile?.role !== 'admin') {
+        return `
+            <div class="empty-state">
+                <div class="icon">🔒</div>
+                <h3>Acesso Restrito</h3>
+                <p>Apenas administradores podem gerenciar colaboradores.</p>
+            </div>
+        `;
+    }
+    
+    const ativos = cache.colaboradores.filter(c => c.ativo !== false);
+    const inativos = cache.colaboradores.filter(c => c.ativo === false);
+    
+    return `
+        <div class="page-header">
+            <div class="page-header-row" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <div class="page-title">Colaboradores</div>
+                    <div class="page-subtitle">${ativos.length} ativos</div>
+                </div>
+                <button class="btn btn-primary" onclick="openNovoColaboradorModal()">
+                    👤 Novo
+                </button>
+            </div>
+        </div>
+        
+        <div class="card">
+            <div class="card-title">👥 Colaboradores Ativos</div>
+            
+            ${ativos.length === 0 ? `
+                <div class="empty-state" style="padding: 30px;">
+                    <div class="icon">👥</div>
+                    <p>Nenhum colaborador cadastrado</p>
+                </div>
+            ` : ativos.map(c => `
+                <div class="list-item" onclick="openEditColaboradorModal('${c.id}')">
+                    <div class="avatar" style="width: 40px; height: 40px; border-radius: 50%; background: var(--primary); color: white; display: flex; align-items: center; justify-content: center; font-weight: bold;">
+                        ${c.nome?.charAt(0)?.toUpperCase() || '?'}
+                    </div>
+                    <div class="list-item-content">
+                        <div class="list-item-title">${c.nome || 'Sem nome'}</div>
+                        <div class="list-item-subtitle">
+                            ${c.email || ''} ${c.setor ? '• ' + c.setor : ''}
+                        </div>
+                    </div>
+                    <div class="list-item-right">
+                        <span class="badge ${c.role === 'admin' ? 'badge-info' : 'badge-success'}">
+                            ${c.role === 'admin' ? 'Admin' : 'Colaborador'}
+                        </span>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+        
+        ${inativos.length > 0 ? `
+            <div class="card">
+                <div class="card-title">🚫 Colaboradores Inativos</div>
+                ${inativos.map(c => `
+                    <div class="list-item" style="opacity: 0.6;" onclick="openEditColaboradorModal('${c.id}')">
+                        <div class="avatar" style="width: 40px; height: 40px; border-radius: 50%; background: var(--gray-400); color: white; display: flex; align-items: center; justify-content: center; font-weight: bold;">
+                            ${c.nome?.charAt(0)?.toUpperCase() || '?'}
+                        </div>
+                        <div class="list-item-content">
+                            <div class="list-item-title">${c.nome || 'Sem nome'}</div>
+                            <div class="list-item-subtitle">${c.email || ''}</div>
+                        </div>
+                        <span class="badge badge-danger">Inativo</span>
+                    </div>
+                `).join('')}
+            </div>
+        ` : ''}
+    `;
+}
+
+function openNovoColaboradorModal() {
+    const body = `
+        <div class="form-group">
+            <label>Nome Completo *</label>
+            <input type="text" id="colab-nome" class="form-input" placeholder="Nome do colaborador">
+        </div>
+        
+        <div class="form-group">
+            <label>Email *</label>
+            <input type="email" id="colab-email" class="form-input" placeholder="email@empresa.com">
+        </div>
+        
+        <div class="form-group">
+            <label>Senha Inicial *</label>
+            <input type="text" id="colab-senha" class="form-input" placeholder="Mínimo 6 caracteres">
+            <small style="color: var(--gray-500); display: block; margin-top: 4px;">
+                O colaborador poderá alterar depois
+            </small>
+        </div>
+        
+        <div class="form-group">
+            <label>Setor</label>
+            <input type="text" id="colab-setor" class="form-input" placeholder="Ex: Administrativo, TI, RH...">
+        </div>
+        
+        <div class="form-group">
+            <label>Tipo de Acesso</label>
+            <select id="colab-role" class="form-input">
+                <option value="colaborador">Colaborador (apenas consumo)</option>
+                <option value="admin">Administrador (acesso total)</option>
+            </select>
+        </div>
+    `;
+    
+    const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="criarColaborador()">Criar Colaborador</button>
+    `;
+    
+    openModal('Novo Colaborador', body, footer);
+}
+
+async function criarColaborador() {
+    const nome = document.getElementById('colab-nome').value.trim();
+    const email = document.getElementById('colab-email').value.trim();
+    const senha = document.getElementById('colab-senha').value;
+    const setor = document.getElementById('colab-setor').value.trim();
+    const role = document.getElementById('colab-role').value;
+    
+    // Validações
+    if (!nome) {
+        showToast('Digite o nome do colaborador', 'error');
+        return;
+    }
+    
+    if (!email) {
+        showToast('Digite o email', 'error');
+        return;
+    }
+    
+    if (!senha || senha.length < 6) {
+        showToast('A senha deve ter no mínimo 6 caracteres', 'error');
+        return;
+    }
+    
+    try {
+        showToast('Criando colaborador...', '');
+        
+        // Criar usuário via signup
+        const { data: signupData, error: signupError } = await supabaseClient.auth.signUp({
+            email,
+            password: senha,
+            options: {
+                data: {
+                    nome,
+                    setor,
+                    role
+                }
+            }
+        });
+        
+        if (signupError) throw signupError;
+        
+        // Atualizar profile com dados adicionais
+        if (signupData.user) {
+            const { error: profileError } = await supabaseClient
+                .from('profiles')
+                .upsert({
+                    id: signupData.user.id,
+                    nome,
+                    email,
+                    setor,
+                    role,
+                    ativo: true
+                });
+            
+            if (profileError) throw profileError;
+        }
+        
+        showToast('Colaborador criado com sucesso!', 'success');
+        closeModal();
+        await loadColaboradores();
+        renderPage();
+        
+    } catch (error) {
+        console.error('Erro ao criar colaborador:', error);
+        
+        if (error.message.includes('already registered')) {
+            showToast('Este email já está cadastrado', 'error');
+        } else {
+            showToast('Erro ao criar colaborador: ' + error.message, 'error');
+        }
+    }
+}
+
+function openEditColaboradorModal(colabId) {
+    const colab = cache.colaboradores.find(c => c.id === colabId);
+    if (!colab) return;
+    
+    const isAtivo = colab.ativo !== false;
+    
+    const body = `
+        <div class="form-group">
+            <label>Nome Completo</label>
+            <input type="text" id="edit-colab-nome" class="form-input" value="${colab.nome || ''}">
+        </div>
+        
+        <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="edit-colab-email" class="form-input" value="${colab.email || ''}" disabled>
+            <small style="color: var(--gray-500);">O email não pode ser alterado</small>
+        </div>
+        
+        <div class="form-group">
+            <label>Setor</label>
+            <input type="text" id="edit-colab-setor" class="form-input" value="${colab.setor || ''}">
+        </div>
+        
+        <div class="form-group">
+            <label>Tipo de Acesso</label>
+            <select id="edit-colab-role" class="form-input">
+                <option value="colaborador" ${colab.role !== 'admin' ? 'selected' : ''}>Colaborador</option>
+                <option value="admin" ${colab.role === 'admin' ? 'selected' : ''}>Administrador</option>
+            </select>
+        </div>
+        
+        <div class="form-group">
+            <label>Status</label>
+            <select id="edit-colab-ativo" class="form-input">
+                <option value="true" ${isAtivo ? 'selected' : ''}>✅ Ativo</option>
+                <option value="false" ${!isAtivo ? 'selected' : ''}>🚫 Inativo</option>
+            </select>
+        </div>
+    `;
+    
+    const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="atualizarColaborador('${colabId}')">Salvar</button>
+    `;
+    
+    openModal('Editar Colaborador', body, footer);
+}
+
+async function atualizarColaborador(colabId) {
+    const nome = document.getElementById('edit-colab-nome').value.trim();
+    const setor = document.getElementById('edit-colab-setor').value.trim();
+    const role = document.getElementById('edit-colab-role').value;
+    const ativo = document.getElementById('edit-colab-ativo').value === 'true';
+    
+    if (!nome) {
+        showToast('Digite o nome', 'error');
+        return;
+    }
+    
+    try {
+        const { error } = await supabaseClient
+            .from('profiles')
+            .update({
+                nome,
+                setor,
+                role,
+                ativo
+            })
+            .eq('id', colabId);
+        
+        if (error) throw error;
+        
+        showToast('Colaborador atualizado!', 'success');
+        closeModal();
+        await loadColaboradores();
+        renderPage();
+        
+    } catch (error) {
+        console.error('Erro:', error);
+        showToast('Erro ao atualizar', 'error');
+    }
+}
+
 }
 
