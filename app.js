@@ -29,7 +29,8 @@ let cache = {
     alertas: [],
     sugestoes: [],
     fornecedores: [],
-    avaliacoes: {}
+    avaliacoes: {},
+    colaboradores: []
 };
 
 // Títulos das páginas
