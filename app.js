@@ -411,6 +411,13 @@ async function renderPage() {
             case 'mais':
                 main.innerHTML = renderMais();
                 break;
+            case 'cadastro-produto':
+                main.innerHTML = renderCadastroProduto();
+                break;
+            case 'colaboradores':
+                await loadColaboradores();
+                main.innerHTML = renderColaboradores();
+                break;
             default:
                 main.innerHTML = renderHome();
         }
