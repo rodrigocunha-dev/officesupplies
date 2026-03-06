@@ -615,10 +615,12 @@ function renderProductCard(p) {
     const isLow = p.estoque <= p.estoque_minimo;
     const pct = Math.min(100, (p.estoque / (p.estoque_minimo * 2)) * 100);
     const fillClass = pct < 30 ? 'low' : pct < 60 ? 'medium' : 'high';
+    const isAdmin = currentProfile?.role === 'admin';
     
     return `
         <div class="product-card ${isLow ? 'low-stock' : ''}" onclick="openProductModal(${p.id})">
             <button class="quick-btn" onclick="event.stopPropagation(); quickConsume(${p.id})" title="Pegar 1">+</button>
+            ${isAdmin ? `<button class="edit-btn" onclick="event.stopPropagation(); openEditProdutoModal(${p.id})" title="Editar">✏️</button>` : ''}
             <div class="product-icon">${p.icone}</div>
             <div class="product-name">${p.nome}</div>
             <div class="product-stock ${isLow ? 'danger' : ''}">${p.estoque} ${p.unidade}</div>
@@ -2198,10 +2200,21 @@ function openEditProdutoModal(produtoId) {
                 <option value="lt" ${produto.unidade === 'lt' ? 'selected' : ''}>Litro (lt)</option>
             </select>
         </div>
+        
+        <div style="border-top: 1px solid var(--gray-200); margin-top: 16px; padding-top: 16px;">
+            <p style="color: var(--gray-500); font-size: 14px; margin-bottom: 12px;">⚠️ Ações perigosas:</p>
+            <div style="display: flex; gap: 12px;">
+                <button class="btn btn-warning" onclick="desativarProduto(${produtoId})" style="flex: 1;">
+                    🚫 Desativar
+                </button>
+                <button class="btn btn-danger" onclick="excluirProduto(${produtoId})" style="flex: 1;">
+                    🗑️ Excluir
+                </button>
+            </div>
+        </div>
     `;
     
     const footer = `
-        <button class="btn btn-danger" onclick="desativarProduto(${produtoId})">🗑️ Desativar</button>
         <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
         <button class="btn btn-primary" onclick="atualizarProduto(${produtoId})">Salvar</button>
     `;
@@ -2249,7 +2262,11 @@ async function atualizarProduto(produtoId) {
 }
 
 async function desativarProduto(produtoId) {
-    if (!confirm('Deseja realmente desativar este produto?')) return;
+    const produto = cache.produtos.find(p => p.id === produtoId);
+    
+    const confirmado = confirm(`Deseja desativar o produto "${produto?.nome}"?\n\nO produto não aparecerá mais nas listagens, mas o histórico será mantido.`);
+    
+    if (!confirmado) return;
     
     try {
         const { error } = await supabaseClient
@@ -2259,14 +2276,58 @@ async function desativarProduto(produtoId) {
         
         if (error) throw error;
         
-        showToast('Produto desativado', 'success');
+        showToast('Produto desativado!', 'success');
         closeModal();
         await loadProdutos();
         renderPage();
         
     } catch (error) {
-        console.error('Erro:', error);
+        console.error('Erro ao desativar produto:', error);
         showToast('Erro ao desativar produto', 'error');
+    }
+}
+
+async function excluirProduto(produtoId) {
+    const produto = cache.produtos.find(p => p.id === produtoId);
+    
+    const confirmado = confirm(`⚠️ ATENÇÃO: Deseja EXCLUIR PERMANENTEMENTE o produto "${produto?.nome}"?\n\nEsta ação não pode ser desfeita e pode afetar o histórico de movimentações.`);
+    
+    if (!confirmado) return;
+    
+    // Segunda confirmação para exclusão
+    const confirmado2 = confirm(`Tem certeza? Digite OK para confirmar a exclusão permanente.`);
+    
+    if (!confirmado2) return;
+    
+    try {
+        // Primeiro, excluir QR codes relacionados
+        await supabaseClient
+            .from('qrcodes')
+            .delete()
+            .eq('produto_id', produtoId);
+        
+        // Excluir avaliações relacionadas
+        await supabaseClient
+            .from('avaliacoes')
+            .delete()
+            .eq('produto_id', produtoId);
+        
+        // Excluir o produto
+        const { error } = await supabaseClient
+            .from('produtos')
+            .delete()
+            .eq('id', produtoId);
+        
+        if (error) throw error;
+        
+        showToast('Produto excluído permanentemente!', 'success');
+        closeModal();
+        await loadProdutos();
+        renderPage();
+        
+    } catch (error) {
+        console.error('Erro ao excluir produto:', error);
+        showToast('Erro ao excluir: ' + error.message, 'error');
     }
 }
 
@@ -2481,6 +2542,7 @@ function openEditColaboradorModal(colabId) {
     if (!colab) return;
     
     const isAtivo = colab.ativo !== false;
+    const isCurrentUser = colab.id === currentUser.id;
     
     const body = `
         <div class="form-group">
@@ -2501,19 +2563,29 @@ function openEditColaboradorModal(colabId) {
         
         <div class="form-group">
             <label>Tipo de Acesso</label>
-            <select id="edit-colab-role" class="form-input">
+            <select id="edit-colab-role" class="form-input" ${isCurrentUser ? 'disabled' : ''}>
                 <option value="colaborador" ${colab.role !== 'admin' ? 'selected' : ''}>Colaborador</option>
                 <option value="admin" ${colab.role === 'admin' ? 'selected' : ''}>Administrador</option>
             </select>
+            ${isCurrentUser ? '<small style="color: var(--gray-500);">Você não pode alterar seu próprio tipo de acesso</small>' : ''}
         </div>
         
         <div class="form-group">
             <label>Status</label>
-            <select id="edit-colab-ativo" class="form-input">
+            <select id="edit-colab-ativo" class="form-input" ${isCurrentUser ? 'disabled' : ''}>
                 <option value="true" ${isAtivo ? 'selected' : ''}>✅ Ativo</option>
                 <option value="false" ${!isAtivo ? 'selected' : ''}>🚫 Inativo</option>
             </select>
         </div>
+        
+        ${!isCurrentUser ? `
+            <div style="border-top: 1px solid var(--gray-200); margin-top: 16px; padding-top: 16px;">
+                <p style="color: var(--gray-500); font-size: 14px; margin-bottom: 12px;">⚠️ Ação perigosa:</p>
+                <button class="btn btn-danger" onclick="excluirColaborador('${colabId}')" style="width: 100%;">
+                    🗑️ Excluir Colaborador
+                </button>
+            </div>
+        ` : ''}
     `;
     
     const footer = `
@@ -2556,6 +2628,37 @@ async function atualizarColaborador(colabId) {
     } catch (error) {
         console.error('Erro:', error);
         showToast('Erro ao atualizar', 'error');
+    }
+}
+
+async function excluirColaborador(colabId) {
+    const colab = cache.colaboradores.find(c => c.id === colabId);
+    
+    if (colabId === currentUser.id) {
+        showToast('Você não pode excluir a si mesmo!', 'error');
+        return;
+    }
+    
+    const confirmado = confirm(`⚠️ ATENÇÃO: Deseja EXCLUIR o colaborador "${colab?.nome}"?\n\nO perfil será removido, mas o usuário de autenticação permanecerá (pode ser removido manualmente no Supabase).`);
+    
+    if (!confirmado) return;
+    
+    try {
+        const { error } = await supabaseClient
+            .from('profiles')
+            .delete()
+            .eq('id', colabId);
+        
+        if (error) throw error;
+        
+        showToast('Colaborador excluído!', 'success');
+        closeModal();
+        await loadColaboradores();
+        renderPage();
+        
+    } catch (error) {
+        console.error('Erro ao excluir colaborador:', error);
+        showToast('Erro ao excluir: ' + error.message, 'error');
     }
 }
 
