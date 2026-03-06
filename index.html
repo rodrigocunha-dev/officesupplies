@@ -1656,6 +1656,44 @@
                 border: 1px solid #ddd;
             }
         }
+                /* Botão de editar no card do produto */
+        .product-card .edit-btn {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: none;
+            background: var(--gray-100);
+            cursor: pointer;
+            font-size: 14px;
+            opacity: 0;
+            transition: all 0.2s;
+            z-index: 2;
+        }
+
+        .product-card:hover .edit-btn {
+            opacity: 1;
+        }
+
+        .product-card .edit-btn:hover {
+            background: var(--primary);
+            transform: scale(1.1);
+        }
+
+        /* Botão warning (amarelo) */
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+        }
+
+        .btn-warning:hover {
+            background: #d97706;
+        }
+    </style>
+</head>
+
     </style>
 </head>
 <body>
