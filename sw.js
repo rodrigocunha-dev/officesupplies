@@ -15,8 +15,8 @@ self.addEventListener('install', event => {
         console.log('Cache aberto');
         return cache.addAll(urlsToCache);
       })
+      .then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
 // Ativação

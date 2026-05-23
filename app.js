@@ -54,6 +54,37 @@ const PAGE_TITLES = {
 // INICIALIZAÇÃO
 // ============================================
 document.addEventListener('DOMContentLoaded', async () => {
+    // Login form listener (aqui para garantir que o DOM já existe)
+    document.getElementById('login-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        const email = document.getElementById('email').value;
+        const password = document.getElementById('password').value;
+        const btn = document.getElementById('login-btn');
+        const errorEl = document.getElementById('login-error');
+        
+        btn.disabled = true;
+        btn.innerHTML = '<span>Entrando...</span>';
+        errorEl.classList.remove('show');
+        
+        try {
+            const { data, error } = await supabaseClient.auth.signInWithPassword({
+                email,
+                password
+            });
+            
+            if (error) throw error;
+            
+            // O listener onAuthStateChange vai cuidar do resto
+        } catch (error) {
+            console.error('Erro no login:', error);
+            errorEl.textContent = getErrorMessage(error);
+            errorEl.classList.add('show');
+            btn.disabled = false;
+            btn.innerHTML = '<span>Entrar</span>';
+        }
+    });
+
     await checkAuth();
 });
 
@@ -109,37 +140,6 @@ function showLoading() {
 function hideLoading() {
     document.getElementById('loading').classList.add('hidden');
 }
-
-// Login form
-document.getElementById('login-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    
-    const email = document.getElementById('email').value;
-    const password = document.getElementById('password').value;
-    const btn = document.getElementById('login-btn');
-    const errorEl = document.getElementById('login-error');
-    
-    btn.disabled = true;
-    btn.innerHTML = '<span>Entrando...</span>';
-    errorEl.classList.remove('show');
-    
-    try {
-        const { data, error } = await supabaseClient.auth.signInWithPassword({
-            email,
-            password
-        });
-        
-        if (error) throw error;
-        
-        // O listener onAuthStateChange vai cuidar do resto
-    } catch (error) {
-        console.error('Erro no login:', error);
-        errorEl.textContent = getErrorMessage(error);
-        errorEl.classList.add('show');
-        btn.disabled = false;
-        btn.innerHTML = '<span>Entrar</span>';
-    }
-});
 
 function getErrorMessage(error) {
     const messages = {
@@ -369,7 +369,6 @@ function navigate(page) {
 }
 
 async function renderPage() {
-    const main = document.getElementById('main-content');
     main.innerHTML = '<div class="loading-overlay"><div class="spinner"></div></div>';
     
     try {
@@ -1017,10 +1016,13 @@ function renderFornecedores() {
 // RENDERIZAÇÃO - LISTA DE COMPRAS
 // ============================================
 function renderCompras() {
+    const diasCobertura = parseInt(document.getElementById('dias-cobertura')?.value) || 30;
+    const margemPct = parseInt(document.getElementById('margem-seguranca')?.value) || 20;
+    const margemFator = 1 + margemPct / 100;
+
     const itensCompra = cache.produtos
-        .filter(p => p.estoque <= p.estoque_minimo * 1.2)
+        .filter(p => p.estoque <= p.estoque_minimo * margemFator)
         .map(p => {
-            const diasCobertura = 30;
             const consumoDiario = p.consumo_diario || 0.5;
             const necessario = Math.ceil(consumoDiario * diasCobertura);
             const comprar = Math.max(0, necessario - p.estoque);
@@ -2338,7 +2340,7 @@ async function loadColaboradores() {
     try {
         const { data, error } = await supabaseClient
             .from('profiles')
-            .select('id, nome, email, role, ativo, avatar_url, created_at, updated_at')
+            .select('id, nome, email, role, setor, ativo, avatar_url, created_at, updated_at')
             .order('nome');
         
         if (error) throw error;
