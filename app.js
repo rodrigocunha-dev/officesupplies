@@ -6,8 +6,33 @@
 const SUPABASE_URL = 'https://egtbnjpbnafaeajypmtz.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVndGJuanBibmFmYWVhanlwbXR6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1NTUzNzcsImV4cCI6MjA4ODEzMTM3N30.Yb9ERrPpAQOy8cuPFmEEB7zZALR6Zjt1J_psPAcpgMM';
 
-// Inicializar Supabase
-const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Inicializar Supabase com storage seguro para Edge/Safari
+function createSafeStorage() {
+    try {
+        // Testa se o localStorage está disponível e acessível
+        localStorage.setItem('__test__', '1');
+        localStorage.removeItem('__test__');
+        return localStorage;
+    } catch (e) {
+        // Fallback para memória (Edge com Tracking Prevention, modo privado, etc.)
+        console.warn('localStorage bloqueado, usando storage em memória.');
+        const store = {};
+        return {
+            getItem: (k) => store[k] ?? null,
+            setItem: (k, v) => { store[k] = String(v); },
+            removeItem: (k) => { delete store[k]; }
+        };
+    }
+}
+
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    auth: {
+        storage: createSafeStorage(),
+        autoRefreshToken: true,
+        persistSession: true,
+        detectSessionInUrl: false
+    }
+});
 
 // ============================================
 // ESTADO GLOBAL
@@ -369,6 +394,7 @@ function navigate(page) {
 }
 
 async function renderPage() {
+    const main = document.getElementById('main-content');
     main.innerHTML = '<div class="loading-overlay"><div class="spinner"></div></div>';
     
     try {
