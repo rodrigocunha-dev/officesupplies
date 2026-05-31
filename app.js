@@ -45,6 +45,8 @@ let searchQuery = '';
 let modalCallback = null;
 let selectedProduct = null;
 let selectedQty = 1;
+let filtroPegosHoje = false;
+let filtroEstoqueBaixo = false;
 
 // Cache de dados
 let cache = {
@@ -372,6 +374,8 @@ function navigate(page) {
     currentPage = page;
     currentCategory = 0;
     searchQuery = '';
+    filtroPegosHoje = false;
+    filtroEstoqueBaixo = false;
     
     // Atualizar título
     document.getElementById('header-title').textContent = PAGE_TITLES[page] || page;
@@ -390,6 +394,40 @@ function navigate(page) {
     renderPage();
     
     // Scroll to top
+    document.getElementById('main-content').scrollTop = 0;
+}
+
+function navigatePegosHoje() {
+    filtroPegosHoje = true;
+    filtroEstoqueBaixo = false;
+    currentPage = 'historico';
+    currentCategory = 0;
+    searchQuery = '';
+    document.getElementById('header-title').textContent = PAGE_TITLES['historico'];
+    document.querySelectorAll('.sidebar-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.page === 'historico');
+    });
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.page === 'historico');
+    });
+    renderPage();
+    document.getElementById('main-content').scrollTop = 0;
+}
+
+function navigateEstoqueBaixo() {
+    filtroEstoqueBaixo = true;
+    filtroPegosHoje = false;
+    currentPage = 'estoque';
+    currentCategory = 0;
+    searchQuery = '';
+    document.getElementById('header-title').textContent = PAGE_TITLES['estoque'];
+    document.querySelectorAll('.sidebar-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.page === 'estoque');
+    });
+    document.querySelectorAll('.nav-item').forEach(item => {
+        item.classList.toggle('active', item.dataset.page === 'estoque');
+    });
+    renderPage();
     document.getElementById('main-content').scrollTop = 0;
 }
 
@@ -481,28 +519,33 @@ function updateBadges() {
 async function renderHome() {
     const hoje = new Date().toISOString().split('T')[0];
     
-    // Buscar consumo de hoje
-    const { data: consumoHoje } = await supabaseClient
-        .from('movimentacoes')
-        .select('quantidade')
-        .eq('tipo', 'saida')
-        .gte('created_at', hoje + 'T00:00:00')
-        .lte('created_at', hoje + 'T23:59:59');
+    // Buscar consumo de hoje (com proteção contra erro)
+    let totalConsumo = 0;
+    try {
+        const { data: consumoHoje, error } = await supabaseClient
+            .from('movimentacoes')
+            .select('quantidade')
+            .eq('tipo', 'saida')
+            .gte('created_at', hoje + 'T00:00:00')
+            .lte('created_at', hoje + 'T23:59:59');
+        if (!error) {
+            totalConsumo = (consumoHoje || []).reduce((sum, m) => sum + m.quantidade, 0);
+        }
+    } catch (e) { console.warn('Erro ao buscar consumo de hoje:', e); }
     
-    const totalConsumo = (consumoHoje || []).reduce((sum, m) => sum + m.quantidade, 0);
     const estoqueBaixo = cache.produtos.filter(p => p.estoque <= p.estoque_minimo).length;
     const alertasPendentes = cache.alertas.filter(a => !a.resolvido).length;
     
-    // Buscar últimas movimentações
-    const { data: ultimas } = await supabaseClient
-        .from('movimentacoes')
-        .select(`
-            *,
-            produtos (nome, icone),
-            profiles (nome)
-        `)
-        .order('created_at', { ascending: false })
-        .limit(5);
+    // Buscar últimas movimentações (com proteção contra erro)
+    let ultimas = [];
+    try {
+        const { data, error } = await supabaseClient
+            .from('movimentacoes')
+            .select(`*, produtos (nome, icone), profiles (nome)`)
+            .order('created_at', { ascending: false })
+            .limit(5);
+        if (!error) ultimas = data || [];
+    } catch (e) { console.warn('Erro ao buscar últimas movimentações:', e); }
     
     const nome = currentProfile?.nome?.split(' ')[0] || 'Usuário';
     
@@ -513,7 +556,7 @@ async function renderHome() {
         </div>
         
         <div class="stats-grid">
-            <div class="stat-card" onclick="navigate('produtos')">
+            <div class="stat-card" onclick="navigatePegosHoje()">
                 <div class="stat-icon">🛒</div>
                 <div class="stat-value">${totalConsumo}</div>
                 <div class="stat-label">Pegos hoje</div>
@@ -523,7 +566,7 @@ async function renderHome() {
                 <div class="stat-value">${cache.produtos.length}</div>
                 <div class="stat-label">Produtos</div>
             </div>
-            <div class="stat-card ${estoqueBaixo > 0 ? 'pulse' : ''}" onclick="navigate('estoque')">
+            <div class="stat-card ${estoqueBaixo > 0 ? 'pulse' : ''}" onclick="navigateEstoqueBaixo()">
                 <div class="stat-icon">📉</div>
                 <div class="stat-value" style="color: ${estoqueBaixo > 0 ? 'var(--danger)' : ''}">${estoqueBaixo}</div>
                 <div class="stat-label">Estoque baixo</div>
@@ -664,19 +707,30 @@ function renderProductCard(p) {
 // RENDERIZAÇÃO - ESTOQUE
 // ============================================
 async function renderEstoque() {
-    const sorted = [...cache.produtos].sort((a, b) => {
+    let sorted = [...cache.produtos].sort((a, b) => {
         const diasA = a.consumo_diario > 0 ? a.estoque / a.consumo_diario : 999;
         const diasB = b.consumo_diario > 0 ? b.estoque / b.consumo_diario : 999;
         return diasA - diasB;
     });
-    
+
+    // Filtro vindo do dashboard "Estoque baixo"
+    if (filtroEstoqueBaixo) {
+        sorted = sorted.filter(p => p.estoque <= p.estoque_minimo);
+    }
+
     return `
         <div class="page-header">
             <div class="page-title">Estoque</div>
-            <div class="page-subtitle">Ordenado por urgência</div>
+            <div class="page-subtitle">${filtroEstoqueBaixo ? '⚠️ Somente produtos com estoque baixo' : 'Ordenado por urgência'}</div>
         </div>
         
-        ${sorted.map(p => {
+        ${sorted.length === 0 ? `
+            <div class="empty-state">
+                <div class="icon">✅</div>
+                <h3>Nenhum produto com estoque baixo</h3>
+                <p>Todos os produtos estão dentro do limite mínimo.</p>
+            </div>
+        ` : sorted.map(p => {
             const dias = p.consumo_diario > 0 ? Math.round(p.estoque / p.consumo_diario) : '∞';
             const isLow = p.estoque <= p.estoque_minimo;
             const valueClass = isLow ? 'danger' : p.estoque <= p.estoque_minimo * 1.5 ? 'warning' : 'success';
@@ -697,26 +751,33 @@ async function renderEstoque() {
         }).join('')}
     `;
 }
-
-// ============================================
-// RENDERIZAÇÃO - HISTÓRICO
 // ============================================
 function renderHistorico() {
+    const hoje = new Date().toISOString().split('T')[0];
+    let listaInicial = cache.movimentacoes;
+
+    // Filtro vindo do dashboard "Pegos hoje"
+    if (filtroPegosHoje) {
+        listaInicial = cache.movimentacoes.filter(m =>
+            m.tipo === 'saida' && m.created_at && m.created_at.startsWith(hoje)
+        );
+    }
+
     return `
         <div class="page-header">
             <div class="page-title">Histórico</div>
-            <div class="page-subtitle">${cache.movimentacoes.length} movimentações</div>
+            <div class="page-subtitle">${filtroPegosHoje ? 'Produtos pegos hoje' : cache.movimentacoes.length + ' movimentações'}</div>
         </div>
         
         <div class="tabs">
-            <button class="tab active" onclick="filterHistorico('todos', this)">Todos</button>
+            <button class="tab ${!filtroPegosHoje ? 'active' : ''}" onclick="filterHistorico('todos', this)">Todos</button>
             <button class="tab" onclick="filterHistorico('entrada', this)">Entradas</button>
-            <button class="tab" onclick="filterHistorico('saida', this)">Saídas</button>
+            <button class="tab ${filtroPegosHoje ? 'active' : ''}" onclick="filterHistorico('saida', this)">Saídas</button>
         </div>
         
         <div class="card">
             <div class="history-list" id="historico-list">
-                ${renderHistoricoList(cache.movimentacoes)}
+                ${renderHistoricoList(listaInicial)}
             </div>
         </div>
     `;
@@ -1338,13 +1399,16 @@ async function confirmConsume() {
         const { error } = await supabaseClient
             .from('movimentacoes')
             .insert({
-                produto_id: selectedProduct.id,
+                produto_id: Number(selectedProduct.id),
                 user_id: currentUser.id,
                 tipo: 'saida',
-                quantidade: selectedQty
+                quantidade: Number(selectedQty)
             });
         
-        if (error) throw error;
+        if (error) {
+            console.error('Erro Supabase confirmConsume:', error);
+            throw error;
+        }
         
         showToast(`${selectedQty}x ${selectedProduct.nome} registrado!`, 'success');
         closeModal();
@@ -1357,8 +1421,8 @@ async function confirmConsume() {
         
         renderPage();
     } catch (error) {
-        console.error('Erro:', error);
-        showToast('Erro ao registrar consumo', 'error');
+        console.error('Erro ao registrar consumo:', error);
+        showToast('Erro ao registrar consumo: ' + (error.message || 'verifique o console'), 'error');
     }
 }
 
@@ -1447,28 +1511,39 @@ async function confirmEntrada() {
         const { error } = await supabaseClient
             .from('movimentacoes')
             .insert({
-                produto_id: selectedProduct.id,
+                produto_id: Number(selectedProduct.id),
                 user_id: currentUser.id,
                 tipo: 'entrada',
-                quantidade: selectedQty,
+                quantidade: Number(selectedQty),
                 observacao: obs
             });
         
-        if (error) throw error;
+        if (error) {
+            console.error('Erro Supabase confirmEntrada:', error);
+            throw error;
+        }
+        
+        // Atualizar o estoque do produto no banco também
+        const { error: errEstoque } = await supabaseClient
+            .from('produtos')
+            .update({ estoque: selectedProduct.estoque + Number(selectedQty) })
+            .eq('id', selectedProduct.id);
+        
+        if (errEstoque) console.warn('Aviso ao atualizar estoque do produto:', errEstoque);
         
         showToast(`+${selectedQty} ${selectedProduct.nome} adicionado!`, 'success');
         closeModal();
         
-        // Atualizar cache
+        // Atualizar cache local
         const idx = cache.produtos.findIndex(p => p.id === selectedProduct.id);
         if (idx >= 0) {
-            cache.produtos[idx].estoque += selectedQty;
+            cache.produtos[idx].estoque += Number(selectedQty);
         }
         
         renderPage();
     } catch (error) {
-        console.error('Erro:', error);
-        showToast('Erro ao dar entrada', 'error');
+        console.error('Erro ao dar entrada:', error);
+        showToast('Erro ao dar entrada: ' + (error.message || 'verifique o console'), 'error');
     }
 }
 
@@ -1504,7 +1579,7 @@ function openSugestaoModal() {
 
 async function submitSugestao() {
     const nome = document.getElementById('sugestao-nome').value.trim();
-    const categoria = document.getElementById('sugestao-categoria').value;
+    const categoriaVal = document.getElementById('sugestao-categoria').value;
     const justificativa = document.getElementById('sugestao-justificativa').value.trim();
     
     if (!nome) {
@@ -1517,12 +1592,16 @@ async function submitSugestao() {
             .from('sugestoes')
             .insert({
                 nome,
-                categoria_id: categoria || null,
-                justificativa,
-                user_id: currentUser.id
+                categoria_id: categoriaVal ? Number(categoriaVal) : null,
+                justificativa: justificativa || null,
+                user_id: currentUser.id,
+                status: 'pendente'
             });
         
-        if (error) throw error;
+        if (error) {
+            console.error('Erro Supabase submitSugestao:', error);
+            throw error;
+        }
         
         showToast('Sugestão enviada!', 'success');
         closeModal();
@@ -1532,8 +1611,8 @@ async function submitSugestao() {
             renderPage();
         }
     } catch (error) {
-        console.error('Erro:', error);
-        showToast('Erro ao enviar sugestão', 'error');
+        console.error('Erro ao enviar sugestão:', error);
+        showToast('Erro ao enviar sugestão: ' + (error.message || 'verifique o console'), 'error');
     }
 }
 
@@ -1650,10 +1729,11 @@ function openFornecedorModal(fornecedorId = null) {
 async function saveFornecedor(id) {
     const data = {
         nome: document.getElementById('fornecedor-nome').value.trim(),
-        contato: document.getElementById('fornecedor-contato').value.trim(),
-        telefone: document.getElementById('fornecedor-telefone').value.trim(),
-        email: document.getElementById('fornecedor-email').value.trim(),
-        observacoes: document.getElementById('fornecedor-obs').value.trim()
+        contato: document.getElementById('fornecedor-contato').value.trim() || null,
+        telefone: document.getElementById('fornecedor-telefone').value.trim() || null,
+        email: document.getElementById('fornecedor-email').value.trim() || null,
+        observacoes: document.getElementById('fornecedor-obs').value.trim() || null,
+        ativo: true
     };
     
     if (!data.nome) {
@@ -1664,10 +1744,10 @@ async function saveFornecedor(id) {
     try {
         if (id) {
             const { error } = await supabaseClient.from('fornecedores').update(data).eq('id', id);
-            if (error) throw error;
+            if (error) { console.error('Erro Supabase update fornecedor:', error); throw error; }
         } else {
             const { error } = await supabaseClient.from('fornecedores').insert(data);
-            if (error) throw error;
+            if (error) { console.error('Erro Supabase insert fornecedor:', error); throw error; }
         }
         
         showToast('Fornecedor salvo!', 'success');
@@ -1675,8 +1755,8 @@ async function saveFornecedor(id) {
         await loadFornecedores();
         renderPage();
     } catch (error) {
-        console.error('Erro:', error);
-        showToast('Erro ao salvar', 'error');
+        console.error('Erro ao salvar fornecedor:', error);
+        showToast('Erro ao salvar: ' + (error.message || 'verifique o console'), 'error');
     }
 }
 
@@ -1716,33 +1796,49 @@ async function rateProduct(productId, tipo) {
                 .eq('produto_id', productId)
                 .eq('user_id', currentUser.id);
             
-            if (error) throw error;
+            if (error) { console.error('Erro Supabase rateProduct delete:', error); throw error; }
             delete cache.avaliacoes[productId];
         } else {
             // Upsert avaliação
             const { error } = await supabaseClient
                 .from('avaliacoes')
                 .upsert({
-                    produto_id: productId,
+                    produto_id: Number(productId),
                     user_id: currentUser.id,
                     tipo
                 }, { onConflict: 'produto_id,user_id' });
             
-            if (error) throw error;
+            if (error) { console.error('Erro Supabase rateProduct upsert:', error); throw error; }
             cache.avaliacoes[productId] = tipo;
         }
         
         await loadProdutos();
         await loadAvaliacoes();
         
-        if (selectedProduct?.id === productId) {
-            openProductModal(productId);
+        // Atualizar os botões de avaliação dentro do modal sem fechar e reabrir
+        const produto = cache.produtos.find(p => p.id === productId);
+        if (produto && selectedProduct?.id === productId) {
+            selectedProduct = produto;
+            const userRating = cache.avaliacoes[productId];
+            
+            // Atualizar contadores e estado ativo dos botões
+            const likeBtn = document.querySelector('.action-btn.like');
+            const dislikeBtn = document.querySelector('.action-btn.dislike');
+            if (likeBtn) {
+                likeBtn.className = `action-btn like ${userRating === 'like' ? 'active' : ''}`;
+                likeBtn.querySelector('span:last-child').textContent = produto.likes || 0;
+            }
+            if (dislikeBtn) {
+                dislikeBtn.className = `action-btn dislike ${userRating === 'dislike' ? 'active' : ''}`;
+                dislikeBtn.querySelector('span:last-child').textContent = produto.dislikes || 0;
+            }
+            showToast(tipo === 'like' ? '👍 Avaliação registrada!' : '👎 Avaliação registrada!', 'success');
         } else {
             renderPage();
         }
     } catch (error) {
-        console.error('Erro:', error);
-        showToast('Erro ao avaliar', 'error');
+        console.error('Erro ao avaliar:', error);
+        showToast('Erro ao avaliar: ' + (error.message || 'verifique o console'), 'error');
     }
 }
 
@@ -2102,24 +2198,55 @@ function renderCadastroProduto() {
         
         <div class="card">
             <div class="card-title">📋 Produtos Cadastrados</div>
-            <p style="color: var(--gray-500); margin-bottom: 16px;">
+            <p style="color: var(--gray-500); margin-bottom: 12px;">
                 ${cache.produtos.length} produtos no sistema
             </p>
             
-            ${cache.produtos.slice(0, 10).map(p => `
-                <div class="list-item" onclick="openEditProdutoModal(${p.id})">
-                    <div class="list-item-icon">${p.icone}</div>
-                    <div class="list-item-content">
-                        <div class="list-item-title">${p.nome}</div>
-                        <div class="list-item-subtitle">${p.categorias?.nome || 'Sem categoria'} • ${p.estoque} ${p.unidade}</div>
-                    </div>
-                    <div class="list-item-right">
-                        <button class="btn btn-secondary btn-sm">✏️ Editar</button>
-                    </div>
+            <div class="search-bar" style="margin-bottom: 12px;">
+                <div class="search-input">
+                    <span class="search-icon">🔍</span>
+                    <input 
+                        type="text" 
+                        placeholder="Buscar produto..." 
+                        oninput="filterCadastroProdutos(this.value)"
+                        id="search-cadastro"
+                    >
                 </div>
-            `).join('')}
+            </div>
+            
+            <div id="cadastro-produtos-list">
+                ${cache.produtos.map(p => `
+                    <div class="list-item" onclick="openEditProdutoModal(${p.id})">
+                        <div class="list-item-icon">${p.icone}</div>
+                        <div class="list-item-content">
+                            <div class="list-item-title">${p.nome}</div>
+                            <div class="list-item-subtitle">${p.categorias?.nome || 'Sem categoria'} • ${p.estoque} ${p.unidade}</div>
+                        </div>
+                        <div class="list-item-right">
+                            <button class="btn btn-secondary btn-sm">✏️ Editar</button>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
         </div>
     `;
+}
+
+function filterCadastroProdutos(query) {
+    const q = query.toLowerCase();
+    const filtered = cache.produtos.filter(p => p.nome.toLowerCase().includes(q));
+    document.getElementById('cadastro-produtos-list').innerHTML = filtered.map(p => `
+        <div class="list-item" onclick="openEditProdutoModal(${p.id})">
+            <div class="list-item-icon">${p.icone}</div>
+            <div class="list-item-content">
+                <div class="list-item-title">${p.nome}</div>
+                <div class="list-item-subtitle">${p.categorias?.nome || 'Sem categoria'} • ${p.estoque} ${p.unidade}</div>
+            </div>
+            <div class="list-item-right">
+                <button class="btn btn-secondary btn-sm">✏️ Editar</button>
+            </div>
+        </div>
+    `).join('') || '<p style="color:var(--gray-500);padding:12px;">Nenhum produto encontrado.</p>';
 }
 
 async function salvarProduto() {
