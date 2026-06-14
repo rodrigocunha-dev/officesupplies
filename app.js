@@ -3,12 +3,10 @@
 // ============================================
 
 // ⚠️ CONFIGURAÇÃO DO SUPABASE ⚠️
-// Cole aqui a URL e a chave "anon public" do SEU NOVO projeto Supabase.
-// Onde encontrar: Supabase → Project Settings → Data API (e API Keys)
-//   - SUPABASE_URL      = "Project URL"
-//   - SUPABASE_ANON_KEY = "anon public" key
-const SUPABASE_URL = 'COLE_AQUI_A_URL_DO_PROJETO';
-const SUPABASE_ANON_KEY = 'COLE_AQUI_A_CHAVE_ANON_PUBLIC';
+// A URL já está preenchida. Falta só colar a chave "anon public" do seu
+// projeto (Supabase → Project Settings → API Keys → "anon public").
+const SUPABASE_URL = 'https://pwraaisyrjardodedfqc.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3cmFhaXN5cmphcmRvZGVkZnFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzOTIzMDEsImV4cCI6MjA5Njk2ODMwMX0.cH7Q9KGa9jTogJuSQvgYdvw8QQ2U_g7-fltC2JGUyRk';
 
 // Inicializar Supabase com storage seguro para Edge/Safari
 function createSafeStorage() {
@@ -29,14 +27,40 @@ function createSafeStorage() {
     }
 }
 
-const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-    auth: {
-        storage: createSafeStorage(),
-        autoRefreshToken: true,
-        persistSession: true,
-        detectSessionInUrl: false
+// Inicialização segura: se a configuração estiver faltando ou o SDK não
+// carregar, mostramos um aviso na tela em vez de travar no spinner.
+let supabaseClient = null;
+function configOk() {
+    return SUPABASE_URL && !SUPABASE_URL.includes('COLE_AQUI')
+        && SUPABASE_ANON_KEY && !SUPABASE_ANON_KEY.includes('COLE_AQUI');
+}
+try {
+    if (!window.supabase) {
+        throw new Error('SDK do Supabase não carregou (verifique a conexão).');
     }
-});
+    if (!configOk()) {
+        throw new Error('Configuração do Supabase incompleta no app.js (falta a chave anon public).');
+    }
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: {
+            storage: createSafeStorage(),
+            autoRefreshToken: true,
+            persistSession: true,
+            detectSessionInUrl: false
+        }
+    });
+} catch (e) {
+    console.error('Falha ao inicializar Supabase:', e);
+    // Mostra o aviso assim que a página carregar
+    window.addEventListener('DOMContentLoaded', () => {
+        if (typeof showFatalError === 'function') {
+            showFatalError(e.message);
+        } else {
+            document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;text-align:center">'
+                + '<h2>⚠️ Erro de configuração</h2><p>' + e.message + '</p></div>';
+        }
+    });
+}
 
 // ============================================
 // ESTADO GLOBAL
@@ -133,6 +157,10 @@ function showFatalError(msg) {
 }
 
 async function checkAuth() {
+    if (!supabaseClient) {
+        showFatalError('Configuração do Supabase incompleta no app.js (falta a chave anon public).');
+        return;
+    }
     try {
         // Timeout de segurança: se o Supabase não responder em 12s, não trava
         const sessionResult = await Promise.race([
@@ -157,17 +185,19 @@ async function checkAuth() {
 }
 
 // Listener para mudanças de autenticação
-supabaseClient.auth.onAuthStateChange(async (event, session) => {
-    if (event === 'SIGNED_IN' && session) {
-        currentUser = session.user;
-        await loadUserProfile();
-        await initApp();
-    } else if (event === 'SIGNED_OUT') {
-        currentUser = null;
-        currentProfile = null;
-        showLogin();
-    }
-});
+if (supabaseClient) {
+    supabaseClient.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_IN' && session) {
+            currentUser = session.user;
+            await loadUserProfile();
+            await initApp();
+        } else if (event === 'SIGNED_OUT') {
+            currentUser = null;
+            currentProfile = null;
+            showLogin();
+        }
+    });
+}
 
 // ============================================
 // AUTENTICAÇÃO
