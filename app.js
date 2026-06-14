@@ -2,9 +2,13 @@
 // OFFICESUPPLIES - APLICAÇÃO PRINCIPAL
 // ============================================
 
-// Configuração do Supabase
-const SUPABASE_URL = 'https://egtbnjpbnafaeajypmtz.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVndGJuanBibmFmYWVhanlwbXR6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI1NTUzNzcsImV4cCI6MjA4ODEzMTM3N30.Yb9ERrPpAQOy8cuPFmEEB7zZALR6Zjt1J_psPAcpgMM';
+// ⚠️ CONFIGURAÇÃO DO SUPABASE ⚠️
+// Cole aqui a URL e a chave "anon public" do SEU NOVO projeto Supabase.
+// Onde encontrar: Supabase → Project Settings → Data API (e API Keys)
+//   - SUPABASE_URL      = "Project URL"
+//   - SUPABASE_ANON_KEY = "anon public" key
+const SUPABASE_URL = 'https://pwraaisyrjardodedfqc.supabase.co/rest/v1/';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3cmFhaXN5cmphcmRvZGVkZnFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzOTIzMDEsImV4cCI6MjA5Njk2ODMwMX0.cH7Q9KGa9jTogJuSQvgYdvw8QQ2U_g7-fltC2JGUyRk';
 
 // Inicializar Supabase com storage seguro para Edge/Safari
 function createSafeStorage() {
@@ -115,9 +119,27 @@ document.addEventListener('DOMContentLoaded', async () => {
     await checkAuth();
 });
 
+function showFatalError(msg) {
+    const loading = document.getElementById('loading');
+    if (loading) loading.classList.remove('hidden');
+    const spinner = loading?.querySelector('.spinner');
+    const text = loading?.querySelector('.loading-text');
+    if (spinner) spinner.style.display = 'none';
+    if (text) text.style.display = 'none';
+    const box = document.getElementById('loading-error');
+    const m = document.getElementById('loading-error-msg');
+    if (m) m.textContent = msg || 'Não foi possível carregar o sistema.';
+    if (box) box.style.display = 'block';
+}
+
 async function checkAuth() {
     try {
-        const { data: { session } } = await supabaseClient.auth.getSession();
+        // Timeout de segurança: se o Supabase não responder em 12s, não trava
+        const sessionResult = await Promise.race([
+            supabaseClient.auth.getSession(),
+            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000))
+        ]);
+        const session = sessionResult?.data?.session;
         
         if (session) {
             currentUser = session.user;
@@ -128,7 +150,11 @@ async function checkAuth() {
         }
     } catch (error) {
         console.error('Erro ao verificar autenticação:', error);
-        showLogin();
+        if (error.message === 'timeout') {
+            showFatalError('O servidor demorou para responder. Verifique sua conexão e as configurações do Supabase.');
+        } else {
+            showLogin();
+        }
     }
 }
 
@@ -193,40 +219,71 @@ async function loadUserProfile() {
             .from('profiles')
             .select('*')
             .eq('id', currentUser.id)
-            .single();
+            .maybeSingle();
         
         if (error) throw error;
-        currentProfile = data;
+        
+        if (data) {
+            currentProfile = data;
+        } else {
+            // Rede de segurança: se por algum motivo o perfil não existir,
+            // cria um perfil básico para não travar o sistema (tela branca).
+            console.warn('Perfil não encontrado, criando perfil básico...');
+            const novoPerfil = {
+                id: currentUser.id,
+                nome: currentUser.email.split('@')[0],
+                email: currentUser.email,
+                role: 'colaborador'
+            };
+            const { data: criado } = await supabaseClient
+                .from('profiles')
+                .insert(novoPerfil)
+                .select()
+                .maybeSingle();
+            currentProfile = criado || novoPerfil;
+        }
     } catch (error) {
         console.error('Erro ao carregar perfil:', error);
+        // Mesmo com erro, define um perfil mínimo para o app não travar
+        currentProfile = currentProfile || {
+            id: currentUser.id,
+            nome: currentUser.email.split('@')[0],
+            email: currentUser.email,
+            role: 'colaborador'
+        };
     }
 }
 
 async function initApp() {
     showLoading();
     
-    // Atualizar UI do usuário
-    updateUserUI();
-    
-    // Carregar dados iniciais
-    await Promise.all([
-        loadCategorias(),
-        loadProdutos(),
-        loadAlertas(),
-        loadAvaliacoes()
-    ]);
-    
-    // Atualizar badges
-    updateBadges();
-    
-    // Mostrar app
-    showApp();
-    
-    // Renderizar página inicial
-    navigate('home');
-    
-    // Setup Push Notifications
-    setupPushNotifications();
+    try {
+        // Atualizar UI do usuário
+        updateUserUI();
+        
+        // Carregar dados iniciais (cada um já trata o próprio erro internamente)
+        await Promise.all([
+            loadCategorias(),
+            loadProdutos(),
+            loadAlertas(),
+            loadAvaliacoes()
+        ]);
+        
+        // Atualizar badges
+        updateBadges();
+        
+        // Mostrar app
+        showApp();
+        
+        // Renderizar página inicial
+        navigate('home');
+        
+        // Setup Push Notifications (não pode travar o app se falhar)
+        try { setupPushNotifications(); } catch (e) { console.warn('Push indisponível:', e); }
+    } catch (error) {
+        console.error('Erro ao iniciar o app:', error);
+        showFatalError('Erro ao carregar os dados: ' + (error.message || 'tente novamente.'));
+    }
 }
 
 function updateUserUI() {
