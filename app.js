@@ -7,8 +7,8 @@
 // Onde encontrar: Supabase → Project Settings → Data API (e API Keys)
 //   - SUPABASE_URL      = "Project URL"
 //   - SUPABASE_ANON_KEY = "anon public" key
-const SUPABASE_URL = 'https://pwraaisyrjardodedfqc.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3cmFhaXN5cmphcmRvZGVkZnFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzOTIzMDEsImV4cCI6MjA5Njk2ODMwMX0.cH7Q9KGa9jTogJuSQvgYdvw8QQ2U_g7-fltC2JGUyRk';
+const SUPABASE_URL = 'COLE_AQUI_A_URL_DO_PROJETO';
+const SUPABASE_ANON_KEY = 'COLE_AQUI_A_CHAVE_ANON_PUBLIC';
 
 // Inicializar Supabase com storage seguro para Edge/Safari
 function createSafeStorage() {
@@ -150,11 +150,9 @@ async function checkAuth() {
         }
     } catch (error) {
         console.error('Erro ao verificar autenticação:', error);
-        if (error.message === 'timeout') {
-            showFatalError('O servidor demorou para responder. Verifique sua conexão e as configurações do Supabase.');
-        } else {
-            showLogin();
-        }
+        // Qualquer falha aqui (inclusive timeout) cai na tela de login,
+        // que é sempre recuperável — basta logar de novo.
+        showLogin();
     }
 }
 
@@ -1467,13 +1465,21 @@ async function confirmConsume() {
             throw error;
         }
         
+        // Dar baixa no estoque do produto no banco também
+        const novoEstoque = Math.max(0, selectedProduct.estoque - Number(selectedQty));
+        const { error: errEstoque } = await supabaseClient
+            .from('produtos')
+            .update({ estoque: novoEstoque })
+            .eq('id', selectedProduct.id);
+        if (errEstoque) console.warn('Aviso ao atualizar estoque:', errEstoque);
+        
         showToast(`${selectedQty}x ${selectedProduct.nome} registrado!`, 'success');
         closeModal();
         
         // Atualizar cache local
         const idx = cache.produtos.findIndex(p => p.id === selectedProduct.id);
         if (idx >= 0) {
-            cache.produtos[idx].estoque -= selectedQty;
+            cache.produtos[idx].estoque = novoEstoque;
         }
         
         renderPage();
@@ -1777,10 +1783,26 @@ function openFornecedorModal(fornecedorId = null) {
     
     const footer = `
         <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        ${fornecedorId ? `<button class="btn btn-danger" onclick="deleteFornecedor(${fornecedorId})">Excluir</button>` : ''}
         <button class="btn btn-primary" onclick="saveFornecedor(${fornecedorId || 'null'})">${fornecedor ? 'Salvar' : 'Cadastrar'}</button>
     `;
     
     openModal(fornecedor ? 'Editar Fornecedor' : 'Novo Fornecedor', body, footer);
+}
+
+async function deleteFornecedor(id) {
+    if (!confirm('Tem certeza que deseja excluir este fornecedor?')) return;
+    try {
+        const { error } = await supabaseClient.from('fornecedores').delete().eq('id', id);
+        if (error) { console.error('Erro Supabase delete fornecedor:', error); throw error; }
+        showToast('Fornecedor excluído!', 'success');
+        closeModal();
+        await loadFornecedores();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao excluir fornecedor:', error);
+        showToast('Erro ao excluir: ' + (error.message || 'verifique o console'), 'error');
+    }
 }
 
 async function saveFornecedor(id) {
