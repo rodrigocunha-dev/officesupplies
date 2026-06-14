@@ -7,7 +7,7 @@
 // Onde encontrar: Supabase → Project Settings → Data API (e API Keys)
 //   - SUPABASE_URL      = "Project URL"
 //   - SUPABASE_ANON_KEY = "anon public" key
-const SUPABASE_URL = 'https://pwraaisyrjardodedfqc.supabase.co/rest/v1/';
+const SUPABASE_URL = 'https://pwraaisyrjardodedfqc.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3cmFhaXN5cmphcmRvZGVkZnFjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEzOTIzMDEsImV4cCI6MjA5Njk2ODMwMX0.cH7Q9KGa9jTogJuSQvgYdvw8QQ2U_g7-fltC2JGUyRk';
 
 // Inicializar Supabase com storage seguro para Edge/Safari
