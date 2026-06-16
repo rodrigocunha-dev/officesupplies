@@ -333,8 +333,18 @@ async function initApp() {
         // Mostrar app
         showApp();
         
-        // Renderizar página inicial
-        navigate('home');
+        // Restaurar a última página visitada (volta pra mesma tela após o F5).
+        // Páginas só de admin caem para 'home' se o usuário não for admin.
+        let paginaInicial = 'home';
+        try {
+            const salva = sessionStorage.getItem('ultimaPagina');
+            if (salva && PAGE_TITLES[salva]) paginaInicial = salva;
+        } catch (e) {}
+        const apenasAdmin = ['cadastro-produto', 'colaboradores'];
+        if (apenasAdmin.includes(paginaInicial) && currentProfile?.role !== 'admin') {
+            paginaInicial = 'home';
+        }
+        navigate(paginaInicial);
         
         // Setup Push Notifications (não pode travar o app se falhar)
         try { setupPushNotifications(); } catch (e) { console.warn('Push indisponível:', e); }
@@ -491,6 +501,9 @@ function navigate(page) {
     searchQuery = '';
     filtroPegosHoje = false;
     filtroEstoqueBaixo = false;
+    
+    // Lembrar a página atual para restaurar ao atualizar a tela (F5)
+    try { sessionStorage.setItem('ultimaPagina', page); } catch (e) {}
     
     // Atualizar título
     document.getElementById('header-title').textContent = PAGE_TITLES[page] || page;
