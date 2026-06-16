@@ -106,42 +106,74 @@ const PAGE_TITLES = {
 };
 
 // ============================================
-// INICIALIZAÇÃO
+// INICIALIZAÇÃO  (fluxo de autenticação ÚNICO)
 // ============================================
-document.addEventListener('DOMContentLoaded', async () => {
-    // Login form listener (aqui para garantir que o DOM já existe)
-    document.getElementById('login-form').addEventListener('submit', async (e) => {
+// Princípio: existe UM só ponto que decide entre "mostrar login" e "montar o
+// app" — a função handleAuth. Ela é idempotente (pode ser chamada várias vezes
+// sem montar o app duas vezes). Tanto o getSession inicial quanto o listener
+// onAuthStateChange chamam handleAuth, então nunca há disputa.
+
+let authReady = false;         // já recebemos a primeira resposta de auth?
+let appInitializedFor = null;  // id do usuário para o qual o app já foi montado
+let authInProgress = false;    // evita reentrância enquanto monta o app
+
+document.addEventListener('DOMContentLoaded', () => {
+    setupLoginForm();
+
+    if (!supabaseClient) {
+        showFatalError('Configuração do Supabase incompleta no app.js (falta a chave anon public).');
+        return;
+    }
+
+    // Pergunta a sessão atual uma vez (sessão restaurada do armazenamento).
+    supabaseClient.auth.getSession()
+        .then(({ data }) => handleAuth(data?.session?.user || null))
+        .catch(err => {
+            console.error('Erro ao obter sessão:', err);
+            showLogin();
+        });
+
+    // Rede de segurança: se em 15s nada respondeu, mostra o login (recuperável).
+    setTimeout(() => {
+        if (!authReady) {
+            console.warn('Auth não respondeu a tempo; mostrando login.');
+            showLogin();
+        }
+    }, 15000);
+});
+
+function setupLoginForm() {
+    const form = document.getElementById('login-form');
+    if (!form) return;
+    form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        
-        const email = document.getElementById('email').value;
+        const email = document.getElementById('email').value.trim();
         const password = document.getElementById('password').value;
         const btn = document.getElementById('login-btn');
         const errorEl = document.getElementById('login-error');
-        
-        btn.disabled = true;
-        btn.innerHTML = '<span>Entrando...</span>';
+
+        setLoginBtnLoading(btn, true);
         errorEl.classList.remove('show');
-        
+
         try {
-            const { data, error } = await supabaseClient.auth.signInWithPassword({
-                email,
-                password
-            });
-            
+            const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
             if (error) throw error;
-            
-            // O listener onAuthStateChange vai cuidar do resto
+            // Sucesso: o listener (SIGNED_IN) chama handleAuth e monta o app.
+            // O botão volta ao normal quando o app aparece ou se der erro.
         } catch (error) {
             console.error('Erro no login:', error);
             errorEl.textContent = getErrorMessage(error);
             errorEl.classList.add('show');
-            btn.disabled = false;
-            btn.innerHTML = '<span>Entrar</span>';
+            setLoginBtnLoading(btn, false);
         }
     });
+}
 
-    await checkAuth();
-});
+function setLoginBtnLoading(btn, loading) {
+    if (!btn) return;
+    btn.disabled = loading;
+    btn.innerHTML = loading ? '<span>Entrando...</span>' : '<span>Entrar</span>';
+}
 
 function showFatalError(msg) {
     const loading = document.getElementById('loading');
@@ -156,46 +188,44 @@ function showFatalError(msg) {
     if (box) box.style.display = 'block';
 }
 
-async function checkAuth() {
-    if (!supabaseClient) {
-        showFatalError('Configuração do Supabase incompleta no app.js (falta a chave anon public).');
+// ÚNICO ponto de decisão de autenticação
+async function handleAuth(user) {
+    authReady = true;
+
+    // Sem usuário → tela de login
+    if (!user) {
+        appInitializedFor = null;
+        currentUser = null;
+        currentProfile = null;
+        setLoginBtnLoading(document.getElementById('login-btn'), false);
+        showLogin();
         return;
     }
+
+    // App já montado para este usuário → não remonta (evita corrida em
+    // eventos como TOKEN_REFRESHED, que disparam com a sessão já ativa).
+    if (appInitializedFor === user.id || authInProgress) return;
+
+    authInProgress = true;
+    appInitializedFor = user.id;
+    currentUser = user;
+
     try {
-        // Timeout de segurança: se o Supabase não responder em 12s, não trava
-        const sessionResult = await Promise.race([
-            supabaseClient.auth.getSession(),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 12000))
-        ]);
-        const session = sessionResult?.data?.session;
-        
-        if (session) {
-            currentUser = session.user;
-            await loadUserProfile();
-            await initApp();
-        } else {
-            showLogin();
-        }
-    } catch (error) {
-        console.error('Erro ao verificar autenticação:', error);
-        // Qualquer falha aqui (inclusive timeout) cai na tela de login,
-        // que é sempre recuperável — basta logar de novo.
-        showLogin();
+        await loadUserProfile();
+        await initApp();
+    } catch (e) {
+        console.error('Erro ao montar o app:', e);
+        appInitializedFor = null;
+        showFatalError('Erro ao carregar o sistema: ' + (e.message || 'tente novamente.'));
+    } finally {
+        authInProgress = false;
     }
 }
 
-// Listener para mudanças de autenticação
+// Listener: qualquer mudança de auth passa pelo mesmo handleAuth
 if (supabaseClient) {
-    supabaseClient.auth.onAuthStateChange(async (event, session) => {
-        if (event === 'SIGNED_IN' && session) {
-            currentUser = session.user;
-            await loadUserProfile();
-            await initApp();
-        } else if (event === 'SIGNED_OUT') {
-            currentUser = null;
-            currentProfile = null;
-            showLogin();
-        }
+    supabaseClient.auth.onAuthStateChange((event, session) => {
+        handleAuth(session?.user || null);
     });
 }
 
