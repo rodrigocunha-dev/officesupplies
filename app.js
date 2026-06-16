@@ -75,6 +75,7 @@ let selectedProduct = null;
 let selectedQty = 1;
 let filtroPegosHoje = false;
 let filtroEstoqueBaixo = false;
+let estoqueTab = 'todos';  // aba ativa em Estoque: 'todos' | 'baixo' | 'compras'
 
 // Cache de dados
 let cache = {
@@ -96,9 +97,7 @@ const PAGE_TITLES = {
     historico: 'Histórico',
     sugestoes: 'Sugestões',
     alertas: 'Alertas',
-    entrada: 'Entrada de Estoque',
     fornecedores: 'Fornecedores',
-    compras: 'Lista de Compras',
     relatorios: 'Relatórios',
     mais: 'Mais Opções',
     'cadastro-produto': 'Cadastrar Produto',
@@ -501,6 +500,7 @@ function navigate(page) {
     searchQuery = '';
     filtroPegosHoje = false;
     filtroEstoqueBaixo = false;
+    estoqueTab = 'todos';
     
     // Lembrar a página atual para restaurar ao atualizar a tela (F5)
     try { sessionStorage.setItem('ultimaPagina', page); } catch (e) {}
@@ -545,9 +545,11 @@ function navigatePegosHoje() {
 function navigateEstoqueBaixo() {
     filtroEstoqueBaixo = true;
     filtroPegosHoje = false;
+    estoqueTab = 'baixo';
     currentPage = 'estoque';
     currentCategory = 0;
     searchQuery = '';
+    try { sessionStorage.setItem('ultimaPagina', 'estoque'); } catch (e) {}
     document.getElementById('header-title').textContent = PAGE_TITLES['estoque'];
     document.querySelectorAll('.sidebar-item').forEach(item => {
         item.classList.toggle('active', item.dataset.page === 'estoque');
@@ -586,15 +588,9 @@ async function renderPage() {
                 await loadAlertas();
                 main.innerHTML = renderAlertas();
                 break;
-            case 'entrada':
-                main.innerHTML = renderEntrada();
-                break;
             case 'fornecedores':
                 await loadFornecedores();
                 main.innerHTML = renderFornecedores();
-                break;
-            case 'compras':
-                main.innerHTML = renderCompras();
                 break;
             case 'relatorios':
                 main.innerHTML = renderRelatorios();
@@ -835,49 +831,75 @@ function renderProductCard(p) {
 // RENDERIZAÇÃO - ESTOQUE
 // ============================================
 async function renderEstoque() {
+    const isAdmin = currentProfile?.role === 'admin';
+    // Segurança: a aba Compras é exclusiva de admin. Se um colaborador
+    // chegar nela de algum jeito, cai em "Todos".
+    if (estoqueTab === 'compras' && !isAdmin) estoqueTab = 'todos';
+
+    const subtitulo = estoqueTab === 'baixo' ? 'Produtos abaixo do mínimo'
+        : estoqueTab === 'compras' ? 'Sugestão de compra'
+        : 'Ordenado por urgência';
+
+    const conteudo = estoqueTab === 'compras'
+        ? renderComprasConteudo()
+        : renderEstoqueLista(estoqueTab === 'baixo');
+
+    return `
+        <div class="page-header">
+            <div class="page-title">Estoque</div>
+            <div class="page-subtitle">${subtitulo}</div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab ${estoqueTab === 'todos' ? 'active' : ''}" onclick="setEstoqueTab('todos')">Todos</button>
+            <button class="tab ${estoqueTab === 'baixo' ? 'active' : ''}" onclick="setEstoqueTab('baixo')">Estoque baixo</button>
+            ${isAdmin ? `<button class="tab ${estoqueTab === 'compras' ? 'active' : ''}" onclick="setEstoqueTab('compras')">Lista de compras</button>` : ''}
+        </div>
+
+        <div id="estoque-conteudo">${conteudo}</div>
+    `;
+}
+
+function setEstoqueTab(tab) {
+    estoqueTab = tab;
+    renderPage();
+}
+
+function renderEstoqueLista(apenasBaixo) {
     let sorted = [...cache.produtos].sort((a, b) => {
         const diasA = a.consumo_diario > 0 ? a.estoque / a.consumo_diario : 999;
         const diasB = b.consumo_diario > 0 ? b.estoque / b.consumo_diario : 999;
         return diasA - diasB;
     });
 
-    // Filtro vindo do dashboard "Estoque baixo"
-    if (filtroEstoqueBaixo) {
-        sorted = sorted.filter(p => p.estoque <= p.estoque_minimo);
-    }
+    if (apenasBaixo) sorted = sorted.filter(p => p.estoque <= p.estoque_minimo);
 
-    return `
-        <div class="page-header">
-            <div class="page-title">Estoque</div>
-            <div class="page-subtitle">${filtroEstoqueBaixo ? '⚠️ Somente produtos com estoque baixo' : 'Ordenado por urgência'}</div>
-        </div>
-        
-        ${sorted.length === 0 ? `
+    if (sorted.length === 0) {
+        return `
             <div class="empty-state">
                 <div class="icon">✅</div>
-                <h3>Nenhum produto com estoque baixo</h3>
-                <p>Todos os produtos estão dentro do limite mínimo.</p>
-            </div>
-        ` : sorted.map(p => {
-            const dias = p.consumo_diario > 0 ? Math.round(p.estoque / p.consumo_diario) : '∞';
-            const isLow = p.estoque <= p.estoque_minimo;
-            const valueClass = isLow ? 'danger' : p.estoque <= p.estoque_minimo * 1.5 ? 'warning' : 'success';
-            
-            return `
-                <div class="list-item" onclick="openProductModal(${p.id})">
-                    <div class="list-item-icon">${p.icone}</div>
-                    <div class="list-item-content">
-                        <div class="list-item-title">${p.nome}</div>
-                        <div class="list-item-subtitle">~${p.consumo_diario || 0}/${p.unidade}/dia • Mín: ${p.estoque_minimo}</div>
-                    </div>
-                    <div class="list-item-right">
-                        <div class="list-item-value ${valueClass}">${p.estoque}</div>
-                        <div class="list-item-unit">~${dias} dias</div>
-                    </div>
+                <h3>${apenasBaixo ? 'Nenhum produto com estoque baixo' : 'Nenhum produto cadastrado'}</h3>
+                <p>${apenasBaixo ? 'Todos os produtos estão dentro do limite mínimo.' : ''}</p>
+            </div>`;
+    }
+
+    return sorted.map(p => {
+        const dias = p.consumo_diario > 0 ? Math.round(p.estoque / p.consumo_diario) : '∞';
+        const isLow = p.estoque <= p.estoque_minimo;
+        const valueClass = isLow ? 'danger' : p.estoque <= p.estoque_minimo * 1.5 ? 'warning' : 'success';
+        return `
+            <div class="list-item" onclick="openProductModal(${p.id})">
+                <div class="list-item-icon">${p.icone}</div>
+                <div class="list-item-content">
+                    <div class="list-item-title">${p.nome}</div>
+                    <div class="list-item-subtitle">~${p.consumo_diario || 0}/${p.unidade}/dia • Mín: ${p.estoque_minimo}</div>
                 </div>
-            `;
-        }).join('')}
-    `;
+                <div class="list-item-right">
+                    <div class="list-item-value ${valueClass}">${p.estoque}</div>
+                    <div class="list-item-unit">~${dias} dias</div>
+                </div>
+            </div>`;
+    }).join('');
 }
 // ============================================
 function renderHistorico() {
@@ -1230,7 +1252,7 @@ function renderFornecedores() {
 // ============================================
 // RENDERIZAÇÃO - LISTA DE COMPRAS
 // ============================================
-function renderCompras() {
+function renderComprasConteudo() {
     const diasCobertura = parseInt(document.getElementById('dias-cobertura')?.value) || 30;
     const margemPct = parseInt(document.getElementById('margem-seguranca')?.value) || 20;
     const margemFator = 1 + margemPct / 100;
@@ -1245,62 +1267,55 @@ function renderCompras() {
         })
         .filter(p => p.comprar > 0)
         .sort((a, b) => b.comprar - a.comprar);
-    
-    return `
-        <div class="page-header">
-            <div class="page-header-row">
-                <div>
-                    <div class="page-title">Lista de Compras</div>
-                    <div class="page-subtitle">${itensCompra.length} itens para comprar</div>
-                </div>
-                <div class="page-actions">
-                    <button class="btn btn-secondary btn-sm" onclick="exportComprasPDF()">📄 PDF</button>
-                    <button class="btn btn-secondary btn-sm" onclick="exportComprasExcel()">📊 Excel</button>
-                </div>
-            </div>
-        </div>
-        
-        ${itensCompra.length === 0 ? `
+
+    if (itensCompra.length === 0) {
+        return `
             <div class="empty-state">
                 <div class="icon">✅</div>
                 <h3>Estoque em dia!</h3>
                 <p>Não há necessidade de compras no momento</p>
-            </div>
-        ` : `
-            <div class="card mb-4">
-                <div class="card-title">⚙️ Configurações</div>
-                <div class="config-grid">
-                    <div class="config-item">
-                        <label>Dias de Cobertura</label>
-                        <input type="number" id="dias-cobertura" value="30" onchange="renderPage()">
-                        <small>Estoque para quantos dias</small>
-                    </div>
-                    <div class="config-item">
-                        <label>Margem de Segurança</label>
-                        <input type="number" id="margem-seguranca" value="20" onchange="renderPage()">
-                        <small>% adicional</small>
-                    </div>
+            </div>`;
+    }
+
+    return `
+        <div class="page-actions mb-4" style="display:flex; gap:8px;">
+            <button class="btn btn-secondary btn-sm" onclick="exportComprasPDF()">📄 PDF</button>
+            <button class="btn btn-secondary btn-sm" onclick="exportComprasExcel()">📊 Excel</button>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-title">⚙️ Configurações</div>
+            <div class="config-grid">
+                <div class="config-item">
+                    <label>Dias de Cobertura</label>
+                    <input type="number" id="dias-cobertura" value="${diasCobertura}" onchange="renderPage()">
+                    <small>Estoque para quantos dias</small>
+                </div>
+                <div class="config-item">
+                    <label>Margem de Segurança</label>
+                    <input type="number" id="margem-seguranca" value="${margemPct}" onchange="renderPage()">
+                    <small>% adicional</small>
                 </div>
             </div>
-            
-            <div id="lista-compras">
-                ${itensCompra.map(p => `
-                    <div class="shopping-item">
-                        <div class="shopping-item-icon">${p.icone}</div>
-                        <div class="shopping-item-info">
-                            <div class="shopping-item-name">${p.nome}</div>
-                            <div class="shopping-item-meta">
-                                Estoque: ${p.estoque} • Consumo: ${p.consumoDiario}/${p.unidade}/dia
-                            </div>
-                        </div>
-                        <div class="shopping-item-qty">
-                            <div class="value">${p.comprar}</div>
-                            <div class="unit">${p.unidade}</div>
+        </div>
+
+        <div id="lista-compras">
+            ${itensCompra.map(p => `
+                <div class="shopping-item">
+                    <div class="shopping-item-icon">${p.icone}</div>
+                    <div class="shopping-item-info">
+                        <div class="shopping-item-name">${p.nome}</div>
+                        <div class="shopping-item-meta">
+                            Estoque: ${p.estoque} • Consumo: ${p.consumoDiario}/${p.unidade}/dia
                         </div>
                     </div>
-                `).join('')}
-            </div>
-        `}
+                    <div class="shopping-item-qty">
+                        <div class="value">${p.comprar}</div>
+                        <div class="unit">${p.unidade}</div>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
     `;
 }
 
@@ -1393,17 +1408,9 @@ function renderMais() {
                 <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--gray-200);">
                     <div class="sidebar-section-title" style="padding: 0; margin-bottom: 12px;">Administração</div>
                     
-                    <div class="sidebar-item" onclick="navigate('entrada')">
-                        <span class="icon">📥</span>
-                        <span>Entrada de Estoque</span>
-                    </div>
                     <div class="sidebar-item" onclick="navigate('fornecedores')">
                         <span class="icon">🏪</span>
                         <span>Fornecedores</span>
-                    </div>
-                    <div class="sidebar-item" onclick="navigate('compras')">
-                        <span class="icon">🛒</span>
-                        <span>Lista de Compras</span>
                     </div>
                     <div class="sidebar-item" onclick="navigate('relatorios')">
                         <span class="icon">📈</span>
@@ -1502,8 +1509,10 @@ async function openProductModal(productId) {
         </div>
     `;
     
+    const isAdmin = currentProfile?.role === 'admin';
     const footer = `
         <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        ${isAdmin ? `<button class="btn btn-success" onclick="openEntradaModal(${productId})">Dar entrada</button>` : ''}
         <button class="btn btn-primary" onclick="confirmConsume()">Pegar ${selectedQty}</button>
     `;
     
