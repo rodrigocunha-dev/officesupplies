@@ -262,6 +262,23 @@
             background: var(--gray-100);
         }
 
+        .btn-link {
+            display: block;
+            width: 100%;
+            margin-top: 12px;
+            background: none;
+            border: none;
+            color: var(--primary, #2563eb);
+            font-size: 14px;
+            cursor: pointer;
+            text-align: center;
+            padding: 8px;
+        }
+
+        .btn-link:hover {
+            text-decoration: underline;
+        }
+
         .error-message {
             background: var(--danger-light);
             color: var(--danger);
@@ -889,14 +906,33 @@
             display: flex;
             align-items: center;
             gap: 4px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 8px;
+            border: 1px solid transparent;
+            transition: background 0.15s, border-color 0.15s;
+        }
+
+        .rating-item:hover {
+            background: var(--gray-100, #f1f1f1);
         }
 
         .rating-item.like {
             color: var(--success);
         }
 
+        .rating-item.like.active {
+            background: rgba(34,197,94,0.12);
+            border-color: var(--success);
+        }
+
         .rating-item.dislike {
             color: var(--danger);
+        }
+
+        .rating-item.dislike.active {
+            background: rgba(239,68,68,0.12);
+            border-color: var(--danger);
         }
 
         .quick-btn {
@@ -1728,6 +1764,9 @@
                 </div>
                 <button type="submit" class="btn btn-primary" id="login-btn">
                     <span>Entrar</span>
+                </button>
+                <button type="button" class="btn-link" id="forgot-btn" onclick="esqueciSenha()">
+                    Esqueci minha senha
                 </button>
             </form>
         </div>

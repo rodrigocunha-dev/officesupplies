@@ -174,6 +174,36 @@ function setLoginBtnLoading(btn, loading) {
     btn.innerHTML = loading ? '<span>Entrando...</span>' : '<span>Entrar</span>';
 }
 
+async function esqueciSenha() {
+    const email = (document.getElementById('email')?.value || '').trim();
+    const errorEl = document.getElementById('login-error');
+    if (errorEl) errorEl.classList.remove('show');
+
+    if (!email) {
+        if (errorEl) {
+            errorEl.textContent = 'Digite seu email no campo acima e clique novamente em "Esqueci minha senha".';
+            errorEl.classList.add('show');
+        }
+        return;
+    }
+
+    try {
+        const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+            redirectTo: window.location.origin
+        });
+        if (error) throw error;
+        showToast('Se o email existir, enviamos um link para redefinir a senha. Verifique sua caixa de entrada.', 'success');
+    } catch (error) {
+        console.error('Erro ao enviar recuperação:', error);
+        const msg = (error.message || '').toLowerCase();
+        if (msg.includes('rate limit')) {
+            showToast('Muitas tentativas. Aguarde alguns minutos e tente de novo.', 'error');
+        } else {
+            showToast('Erro ao enviar email de recuperação: ' + (error.message || 'tente novamente'), 'error');
+        }
+    }
+}
+
 function showFatalError(msg) {
     const loading = document.getElementById('loading');
     if (loading) loading.classList.remove('hidden');
@@ -344,6 +374,17 @@ async function initApp() {
             paginaInicial = 'home';
         }
         navigate(paginaInicial);
+
+        // Se voltou para o Estoque, restaura também a aba que estava ativa
+        if (paginaInicial === 'estoque') {
+            try {
+                const aba = sessionStorage.getItem('estoqueTab');
+                if (aba && aba !== 'todos') {
+                    estoqueTab = aba;
+                    renderPage();
+                }
+            } catch (e) {}
+        }
         
         // Setup Push Notifications (não pode travar o app se falhar)
         try { setupPushNotifications(); } catch (e) { console.warn('Push indisponível:', e); }
@@ -474,6 +515,7 @@ async function loadFornecedores() {
 }
 
 async function loadAvaliacoes() {
+    if (!currentUser?.id) { cache.avaliacoes = {}; return; }
     try {
         const { data, error } = await supabaseClient
             .from('avaliacoes')
@@ -501,6 +543,7 @@ function navigate(page) {
     filtroPegosHoje = false;
     filtroEstoqueBaixo = false;
     estoqueTab = 'todos';
+    try { sessionStorage.setItem('estoqueTab', 'todos'); } catch (e) {}
     
     // Lembrar a página atual para restaurar ao atualizar a tela (F5)
     try { sessionStorage.setItem('ultimaPagina', page); } catch (e) {}
@@ -546,6 +589,7 @@ function navigateEstoqueBaixo() {
     filtroEstoqueBaixo = true;
     filtroPegosHoje = false;
     estoqueTab = 'baixo';
+    try { sessionStorage.setItem('estoqueTab', 'baixo'); } catch (e) {}
     currentPage = 'estoque';
     currentCategory = 0;
     searchQuery = '';
@@ -808,6 +852,7 @@ function renderProductCard(p) {
     const pct = Math.min(100, (p.estoque / (p.estoque_minimo * 2)) * 100);
     const fillClass = pct < 30 ? 'low' : pct < 60 ? 'medium' : 'high';
     const isAdmin = currentProfile?.role === 'admin';
+    const userRating = cache.avaliacoes[p.id];
     
     return `
         <div class="product-card ${isLow ? 'low-stock' : ''}" onclick="openProductModal(${p.id})">
@@ -820,8 +865,8 @@ function renderProductCard(p) {
                 <div class="stock-fill ${fillClass}" style="width: ${pct}%"></div>
             </div>
             <div class="product-rating">
-                <span class="rating-item like">👍 ${p.likes || 0}</span>
-                <span class="rating-item dislike">👎 ${p.dislikes || 0}</span>
+                <span class="rating-item like ${userRating === 'like' ? 'active' : ''}" onclick="event.stopPropagation(); rateProduct(${p.id}, 'like')">👍 ${p.likes || 0}</span>
+                <span class="rating-item dislike ${userRating === 'dislike' ? 'active' : ''}" onclick="event.stopPropagation(); rateProduct(${p.id}, 'dislike')">👎 ${p.dislikes || 0}</span>
             </div>
         </div>
     `;
@@ -862,6 +907,7 @@ async function renderEstoque() {
 
 function setEstoqueTab(tab) {
     estoqueTab = tab;
+    try { sessionStorage.setItem('estoqueTab', tab); } catch (e) {}
     renderPage();
 }
 
@@ -1043,12 +1089,14 @@ function renderSugestaoItem(s, showActions) {
 }
 
 async function respondSugestao(id, status) {
+    const userId = await getCurrentUserId();
+    if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
     try {
         const { error } = await supabaseClient
             .from('sugestoes')
             .update({
                 status,
-                respondido_por: currentUser.id,
+                respondido_por: userId,
                 respondido_em: new Date().toISOString()
             })
             .eq('id', id);
@@ -1133,12 +1181,14 @@ function renderAlertaItem(a, showActions) {
 }
 
 async function resolveAlerta(id) {
+    const userId = await getCurrentUserId();
+    if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
     try {
         const { error } = await supabaseClient
             .from('alertas')
             .update({
                 resolvido: true,
-                resolvido_por: currentUser.id,
+                resolvido_por: userId,
                 resolvido_em: new Date().toISOString()
             })
             .eq('id', id);
@@ -1494,14 +1544,6 @@ async function openProductModal(productId) {
         </div>
         
         <div class="action-buttons">
-            <div class="action-btn like ${userRating === 'like' ? 'active' : ''}" onclick="rateProduct(${productId}, 'like')">
-                <span class="icon">👍</span>
-                <span>${produto.likes || 0}</span>
-            </div>
-            <div class="action-btn dislike ${userRating === 'dislike' ? 'active' : ''}" onclick="rateProduct(${productId}, 'dislike')">
-                <span class="icon">👎</span>
-                <span>${produto.dislikes || 0}</span>
-            </div>
             <div class="action-btn" onclick="showQRCode('${qrCode}', '${produto.nome}')">
                 <span class="icon">📱</span>
                 <span>QR Code</span>
@@ -1531,13 +1573,15 @@ function changeQty(delta) {
 
 async function confirmConsume() {
     if (!selectedProduct) return;
+    const userId = await getCurrentUserId();
+    if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
     
     try {
         const { error } = await supabaseClient
             .from('movimentacoes')
             .insert({
                 produto_id: Number(selectedProduct.id),
-                user_id: currentUser.id,
+                user_id: userId,
                 tipo: 'saida',
                 quantidade: Number(selectedQty)
             });
@@ -1571,37 +1615,58 @@ async function confirmConsume() {
     }
 }
 
+// Garante o id do usuário logado. Se currentUser estiver vazio por algum
+// motivo, busca direto do Supabase em vez de quebrar com "reading id of null".
+async function getCurrentUserId() {
+    if (currentUser?.id) return currentUser.id;
+    try {
+        const { data } = await supabaseClient.auth.getUser();
+        if (data?.user) { currentUser = data.user; return data.user.id; }
+    } catch (e) { console.error('Falha ao obter usuário:', e); }
+    return null;
+}
+
 async function quickConsume(productId) {
     const produto = cache.produtos.find(p => p.id === productId);
     if (!produto || produto.estoque < 1) {
         showToast('Produto sem estoque!', 'error');
         return;
     }
-    
+
+    const userId = await getCurrentUserId();
+    if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
+
     try {
         const { error } = await supabaseClient
             .from('movimentacoes')
             .insert({
-                produto_id: productId,
-                user_id: currentUser.id,
+                produto_id: Number(productId),
+                user_id: userId,
                 tipo: 'saida',
                 quantidade: 1
             });
         
-        if (error) throw error;
-        
+        if (error) { console.error('Erro Supabase quickConsume:', error); throw error; }
+
+        // Dar baixa no estoque do produto no banco (antes só mexia no cache,
+        // por isso voltava ao atualizar a tela)
+        const novoEstoque = Math.max(0, produto.estoque - 1);
+        const { error: errEstoque } = await supabaseClient
+            .from('produtos')
+            .update({ estoque: novoEstoque })
+            .eq('id', productId);
+        if (errEstoque) console.warn('Aviso ao atualizar estoque:', errEstoque);
+
         showToast(`1x ${produto.nome} ✓`, 'success');
-        
+
         // Atualizar cache local
         const idx = cache.produtos.findIndex(p => p.id === productId);
-        if (idx >= 0) {
-            cache.produtos[idx].estoque -= 1;
-        }
-        
+        if (idx >= 0) cache.produtos[idx].estoque = novoEstoque;
+
         renderPage();
     } catch (error) {
-        console.error('Erro:', error);
-        showToast('Erro ao registrar', 'error');
+        console.error('Erro ao registrar:', error);
+        showToast('Erro ao registrar: ' + (error.message || 'verifique o console'), 'error');
     }
 }
 
@@ -1649,6 +1714,8 @@ function changeQtyEntrada(delta) {
 
 async function confirmEntrada() {
     if (!selectedProduct) return;
+    const userId = await getCurrentUserId();
+    if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
     
     const obs = document.getElementById('entrada-obs')?.value || '';
     
@@ -1657,7 +1724,7 @@ async function confirmEntrada() {
             .from('movimentacoes')
             .insert({
                 produto_id: Number(selectedProduct.id),
-                user_id: currentUser.id,
+                user_id: userId,
                 tipo: 'entrada',
                 quantidade: Number(selectedQty),
                 observacao: obs
@@ -1732,6 +1799,9 @@ async function submitSugestao() {
         return;
     }
     
+    const userId = await getCurrentUserId();
+    if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
+    
     try {
         const { error } = await supabaseClient
             .from('sugestoes')
@@ -1739,7 +1809,7 @@ async function submitSugestao() {
                 nome,
                 categoria_id: categoriaVal ? Number(categoriaVal) : null,
                 justificativa: justificativa || null,
-                user_id: currentUser.id,
+                user_id: userId,
                 status: 'pendente'
             });
         
@@ -1805,6 +1875,9 @@ async function submitAlerta() {
         return;
     }
     
+    const userId = await getCurrentUserId();
+    if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
+    
     try {
         const { error } = await supabaseClient
             .from('alertas')
@@ -1812,7 +1885,7 @@ async function submitAlerta() {
                 produto_id: produto || null,
                 urgencia,
                 descricao,
-                user_id: currentUser.id
+                user_id: userId
             });
         
         if (error) throw error;
@@ -1946,57 +2019,35 @@ function showQRCode(codigo, nome) {
 
 // Avaliação
 async function rateProduct(productId, tipo) {
+    const userId = await getCurrentUserId();
+    if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
     try {
         const current = cache.avaliacoes[productId];
         
         if (current === tipo) {
-            // Remover avaliação
+            // Clicou de novo na mesma avaliação → remove
             const { error } = await supabaseClient
                 .from('avaliacoes')
                 .delete()
                 .eq('produto_id', productId)
-                .eq('user_id', currentUser.id);
-            
+                .eq('user_id', userId);
             if (error) { console.error('Erro Supabase rateProduct delete:', error); throw error; }
             delete cache.avaliacoes[productId];
         } else {
-            // Upsert avaliação
             const { error } = await supabaseClient
                 .from('avaliacoes')
                 .upsert({
                     produto_id: Number(productId),
-                    user_id: currentUser.id,
+                    user_id: userId,
                     tipo
                 }, { onConflict: 'produto_id,user_id' });
-            
             if (error) { console.error('Erro Supabase rateProduct upsert:', error); throw error; }
             cache.avaliacoes[productId] = tipo;
         }
         
         await loadProdutos();
         await loadAvaliacoes();
-        
-        // Atualizar os botões de avaliação dentro do modal sem fechar e reabrir
-        const produto = cache.produtos.find(p => p.id === productId);
-        if (produto && selectedProduct?.id === productId) {
-            selectedProduct = produto;
-            const userRating = cache.avaliacoes[productId];
-            
-            // Atualizar contadores e estado ativo dos botões
-            const likeBtn = document.querySelector('.action-btn.like');
-            const dislikeBtn = document.querySelector('.action-btn.dislike');
-            if (likeBtn) {
-                likeBtn.className = `action-btn like ${userRating === 'like' ? 'active' : ''}`;
-                likeBtn.querySelector('span:last-child').textContent = produto.likes || 0;
-            }
-            if (dislikeBtn) {
-                dislikeBtn.className = `action-btn dislike ${userRating === 'dislike' ? 'active' : ''}`;
-                dislikeBtn.querySelector('span:last-child').textContent = produto.dislikes || 0;
-            }
-            showToast(tipo === 'like' ? '👍 Avaliação registrada!' : '👎 Avaliação registrada!', 'success');
-        } else {
-            renderPage();
-        }
+        renderPage();
     } catch (error) {
         console.error('Erro ao avaliar:', error);
         showToast('Erro ao avaliar: ' + (error.message || 'verifique o console'), 'error');
@@ -2752,7 +2803,12 @@ function openNovoColaboradorModal() {
         
         <div class="form-group">
             <label>Senha Inicial *</label>
-            <input type="text" id="colab-senha" class="form-input" placeholder="Mínimo 6 caracteres">
+            <input type="password" id="colab-senha" class="form-input" placeholder="Mínimo 6 caracteres">
+        </div>
+        
+        <div class="form-group">
+            <label>Confirmar Senha *</label>
+            <input type="password" id="colab-senha2" class="form-input" placeholder="Digite a senha novamente">
             <small style="color: var(--gray-500); display: block; margin-top: 4px;">
                 O colaborador poderá alterar depois
             </small>
@@ -2780,10 +2836,22 @@ function openNovoColaboradorModal() {
     openModal('Novo Colaborador', body, footer);
 }
 
+// Cliente secundário só para criar usuários. Sem persistir sessão, para que
+// criar um colaborador NÃO troque/derrube a sessão do admin que está logado.
+let _signupClient = null;
+function getSignupClient() {
+    if (_signupClient) return _signupClient;
+    _signupClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false }
+    });
+    return _signupClient;
+}
+
 async function criarColaborador() {
     const nome = document.getElementById('colab-nome').value.trim();
     const email = document.getElementById('colab-email').value.trim();
     const senha = document.getElementById('colab-senha').value;
+    const senha2 = document.getElementById('colab-senha2').value;
     const setor = document.getElementById('colab-setor').value.trim();
     const role = document.getElementById('colab-role').value;
     
@@ -2803,11 +2871,16 @@ async function criarColaborador() {
         return;
     }
     
+    if (senha !== senha2) {
+        showToast('As senhas não conferem', 'error');
+        return;
+    }
+    
     try {
         showToast('Criando colaborador...', '');
         
-        // Criar usuário via signup
-        const { data: signupData, error: signupError } = await supabaseClient.auth.signUp({
+        // Criar usuário via signup (cliente secundário não afeta a sessão do admin)
+        const { data: signupData, error: signupError } = await getSignupClient().auth.signUp({
             email,
             password: senha,
             options: {
@@ -2844,11 +2917,13 @@ async function criarColaborador() {
         
     } catch (error) {
         console.error('Erro ao criar colaborador:', error);
-        
-        if (error.message.includes('already registered')) {
+        const msg = error.message || '';
+        if (msg.includes('already registered') || msg.includes('already been registered')) {
             showToast('Este email já está cadastrado', 'error');
+        } else if (msg.toLowerCase().includes('rate limit')) {
+            showToast('Limite de emails do Supabase atingido. Veja a observação para resolver.', 'error');
         } else {
-            showToast('Erro ao criar colaborador: ' + error.message, 'error');
+            showToast('Erro ao criar colaborador: ' + msg, 'error');
         }
     }
 }
@@ -2858,7 +2933,7 @@ function openEditColaboradorModal(colabId) {
     if (!colab) return;
     
     const isAtivo = colab.ativo !== false;
-    const isCurrentUser = colab.id === currentUser.id;
+    const isCurrentUser = colab.id === currentUser?.id;
     
     const body = `
         <div class="form-group">
@@ -2950,7 +3025,7 @@ async function atualizarColaborador(colabId) {
 async function excluirColaborador(colabId) {
     const colab = cache.colaboradores.find(c => c.id === colabId);
     
-    if (colabId === currentUser.id) {
+    if (colabId === currentUser?.id) {
         showToast('Você não pode excluir a si mesmo!', 'error');
         return;
     }
