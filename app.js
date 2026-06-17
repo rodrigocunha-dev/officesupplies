@@ -1,6 +1,7 @@
 // ============================================
 // OFFICESUPPLIES - APLICAÇÃO PRINCIPAL
 // ============================================
+console.log('%cOfficeSupplies — app.js versão 2025-06-17-B', 'color:#2563eb;font-weight:bold');
 
 // ⚠️ CONFIGURAÇÃO DO SUPABASE ⚠️
 // A URL já está preenchida. Falta só colar a chave "anon public" do seu
@@ -76,6 +77,8 @@ let selectedQty = 1;
 let filtroPegosHoje = false;
 let filtroEstoqueBaixo = false;
 let estoqueTab = 'todos';  // aba ativa em Estoque: 'todos' | 'baixo' | 'compras'
+let comprasDias = 30;      // dias de cobertura (Lista de compras)
+let comprasMargem = 20;    // margem de segurança % (Lista de compras)
 
 // Cache de dados
 let cache = {
@@ -174,32 +177,54 @@ function setLoginBtnLoading(btn, loading) {
     btn.innerHTML = loading ? '<span>Entrando...</span>' : '<span>Entrar</span>';
 }
 
-async function esqueciSenha() {
-    const email = (document.getElementById('email')?.value || '').trim();
-    const errorEl = document.getElementById('login-error');
-    if (errorEl) errorEl.classList.remove('show');
+function isEmailValido(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
 
-    if (!email) {
-        if (errorEl) {
-            errorEl.textContent = 'Digite seu email no campo acima e clique novamente em "Esqueci minha senha".';
-            errorEl.classList.add('show');
-        }
-        return;
-    }
+function esqueciSenha() {
+    const emailAtual = (document.getElementById('email')?.value || '').trim();
+    const body = `
+        <p style="color: var(--gray-600); margin-bottom: 16px;">
+            Digite seu email e enviaremos um link para você redefinir sua senha.
+        </p>
+        <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="recuperar-email" class="form-input" placeholder="seu@email.com" value="${emailAtual}">
+            <div id="recuperar-erro" style="color: var(--danger); font-size: 13px; margin-top: 6px; display: none;"></div>
+        </div>
+    `;
+    const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="enviarRecuperacao()">Recuperar senha</button>
+    `;
+    openModal('Recuperar senha', body, footer);
+}
+
+async function enviarRecuperacao() {
+    const email = (document.getElementById('recuperar-email')?.value || '').trim();
+    const erroEl = document.getElementById('recuperar-erro');
+    const mostrarErro = (txt) => {
+        if (erroEl) { erroEl.textContent = txt; erroEl.style.display = 'block'; }
+    };
+    if (erroEl) erroEl.style.display = 'none';
+
+    if (!email) { mostrarErro('Digite seu email.'); return; }
+    if (!isEmailValido(email)) { mostrarErro('Digite um email válido (ex: nome@empresa.com).'); return; }
 
     try {
         const { error } = await supabaseClient.auth.resetPasswordForEmail(email, {
             redirectTo: window.location.origin
         });
         if (error) throw error;
+        closeModal();
         showToast('Se o email existir, enviamos um link para redefinir a senha. Verifique sua caixa de entrada.', 'success');
     } catch (error) {
         console.error('Erro ao enviar recuperação:', error);
         const msg = (error.message || '').toLowerCase();
         if (msg.includes('rate limit')) {
-            showToast('Muitas tentativas. Aguarde alguns minutos e tente de novo.', 'error');
+            mostrarErro('Muitas tentativas. Aguarde alguns minutos e tente de novo.');
         } else {
-            showToast('Erro ao enviar email de recuperação: ' + (error.message || 'tente novamente'), 'error');
+            mostrarErro('Erro ao enviar: ' + (error.message || 'tente novamente'));
         }
     }
 }
@@ -905,6 +930,14 @@ async function renderEstoque() {
     `;
 }
 
+function setComprasConfig() {
+    const d = parseInt(document.getElementById('dias-cobertura')?.value);
+    const m = parseInt(document.getElementById('margem-seguranca')?.value);
+    if (!isNaN(d) && d > 0) comprasDias = d;
+    if (!isNaN(m) && m >= 0) comprasMargem = m;
+    renderPage();
+}
+
 function setEstoqueTab(tab) {
     estoqueTab = tab;
     try { sessionStorage.setItem('estoqueTab', tab); } catch (e) {}
@@ -934,7 +967,7 @@ function renderEstoqueLista(apenasBaixo) {
         const isLow = p.estoque <= p.estoque_minimo;
         const valueClass = isLow ? 'danger' : p.estoque <= p.estoque_minimo * 1.5 ? 'warning' : 'success';
         return `
-            <div class="list-item" onclick="openProductModal(${p.id})">
+            <div class="list-item" style="cursor: default;">
                 <div class="list-item-icon">${p.icone}</div>
                 <div class="list-item-content">
                     <div class="list-item-title">${p.nome}</div>
@@ -1303,8 +1336,8 @@ function renderFornecedores() {
 // RENDERIZAÇÃO - LISTA DE COMPRAS
 // ============================================
 function renderComprasConteudo() {
-    const diasCobertura = parseInt(document.getElementById('dias-cobertura')?.value) || 30;
-    const margemPct = parseInt(document.getElementById('margem-seguranca')?.value) || 20;
+    const diasCobertura = comprasDias;
+    const margemPct = comprasMargem;
     const margemFator = 1 + margemPct / 100;
 
     const itensCompra = cache.produtos
@@ -1338,12 +1371,12 @@ function renderComprasConteudo() {
             <div class="config-grid">
                 <div class="config-item">
                     <label>Dias de Cobertura</label>
-                    <input type="number" id="dias-cobertura" value="${diasCobertura}" onchange="renderPage()">
+                    <input type="number" id="dias-cobertura" value="${diasCobertura}" min="1" onchange="setComprasConfig()">
                     <small>Estoque para quantos dias</small>
                 </div>
                 <div class="config-item">
                     <label>Margem de Segurança</label>
-                    <input type="number" id="margem-seguranca" value="${margemPct}" onchange="renderPage()">
+                    <input type="number" id="margem-seguranca" value="${margemPct}" min="0" onchange="setComprasConfig()">
                     <small>% adicional</small>
                 </div>
             </div>
@@ -1373,55 +1406,56 @@ function renderComprasConteudo() {
 // RENDERIZAÇÃO - RELATÓRIOS
 // ============================================
 function renderRelatorios() {
+    const btns = (fn) => `
+        <div class="list-item-right" style="display:flex; gap:6px;">
+            <button class="btn btn-secondary btn-sm" onclick="${fn}('pdf')">📄 PDF</button>
+            <button class="btn btn-secondary btn-sm" onclick="${fn}('excel')">📊 Excel</button>
+        </div>`;
     return `
         <div class="page-header">
             <div class="page-title">Relatórios</div>
-            <div class="page-subtitle">Exporte dados do sistema</div>
+            <div class="page-subtitle">Gere relatórios em PDF ou Excel</div>
         </div>
         
         <div class="card">
-            <div class="card-title">📊 Relatórios Disponíveis</div>
+            <div class="card-title">📊 Relatórios</div>
             
-            <div class="list-item" onclick="gerarRelatorioEstoque()">
+            <div class="list-item" style="cursor:default;">
                 <div class="list-item-icon">📦</div>
                 <div class="list-item-content">
                     <div class="list-item-title">Relatório de Estoque</div>
                     <div class="list-item-subtitle">Posição atual de todos os produtos</div>
                 </div>
-                <div class="list-item-right">
-                    <button class="btn btn-primary btn-sm">Gerar</button>
-                </div>
+                ${btns('gerarRelatorioEstoque')}
             </div>
             
-            <div class="list-item" onclick="gerarRelatorioConsumo()">
+            <div class="list-item" style="cursor:default;">
                 <div class="list-item-icon">📈</div>
                 <div class="list-item-content">
                     <div class="list-item-title">Relatório de Consumo</div>
                     <div class="list-item-subtitle">Movimentações e consumo por produto</div>
                 </div>
-                <div class="list-item-right">
-                    <button class="btn btn-primary btn-sm">Gerar</button>
-                </div>
+                ${btns('gerarRelatorioConsumo')}
             </div>
             
-            <div class="list-item" onclick="gerarRelatorioCompras()">
+            <div class="list-item" style="cursor:default;">
                 <div class="list-item-icon">🛒</div>
                 <div class="list-item-content">
                     <div class="list-item-title">Lista de Compras</div>
                     <div class="list-item-subtitle">Itens que precisam ser repostos</div>
                 </div>
-                <div class="list-item-right">
-                    <button class="btn btn-primary btn-sm">Gerar</button>
-                </div>
+                ${btns('gerarRelatorioCompras')}
             </div>
         </div>
         
         <div class="card">
-            <div class="card-title">📤 Exportar Dados</div>
-            
+            <div class="card-title">💾 Backup completo</div>
+            <p style="color: var(--gray-500); font-size: 14px; margin-bottom: 12px;">
+                Exporta <strong>todos os dados</strong> do sistema (produtos, movimentações, fornecedores, etc.) num único arquivo — útil para backup ou análise externa. Diferente dos relatórios acima, que são focados em um tema específico.
+            </p>
             <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
-                <button class="btn btn-secondary" onclick="exportarTudoExcel()">📊 Tudo em Excel</button>
-                <button class="btn btn-secondary" onclick="exportarTudoPDF()">📄 Tudo em PDF</button>
+                <button class="btn btn-secondary" onclick="exportarTudoExcel()">📊 Backup em Excel</button>
+                <button class="btn btn-secondary" onclick="exportarTudoPDF()">📄 Backup em PDF</button>
             </div>
         </div>
     `;
@@ -2078,9 +2112,24 @@ function showUserMenu() {
 // ============================================
 // RELATÓRIOS E EXPORTAÇÕES
 // ============================================
-async function gerarRelatorioEstoque() {
-    showToast('Gerando relatório...', 'success');
-    
+async function gerarRelatorioEstoque(formato) {
+    if (formato === 'excel') {
+        showToast('Gerando Excel...', 'success');
+        const dados = cache.produtos.map(p => ({
+            Produto: p.nome,
+            Categoria: p.categorias?.nome || '-',
+            Estoque: p.estoque,
+            'Mínimo': p.estoque_minimo,
+            Status: p.estoque <= p.estoque_minimo ? 'BAIXO' : 'OK'
+        }));
+        const ws = XLSX.utils.json_to_sheet(dados);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Estoque');
+        XLSX.writeFile(wb, 'relatorio-estoque.xlsx');
+        return;
+    }
+
+    showToast('Gerando PDF...', 'success');
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
     
@@ -2106,10 +2155,25 @@ async function gerarRelatorioEstoque() {
     doc.save('relatorio-estoque.pdf');
 }
 
-async function gerarRelatorioConsumo() {
+async function gerarRelatorioConsumo(formato) {
     showToast('Gerando relatório...', 'success');
     await loadMovimentacoes();
-    
+
+    if (formato === 'excel') {
+        const dados = cache.movimentacoes.map(m => ({
+            Produto: m.produtos?.nome || '-',
+            Tipo: m.tipo === 'entrada' ? 'Entrada' : 'Saída',
+            Quantidade: m.quantidade,
+            'Usuário': m.profiles?.nome || '-',
+            Data: new Date(m.created_at).toLocaleString('pt-BR')
+        }));
+        const ws = XLSX.utils.json_to_sheet(dados);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Consumo');
+        XLSX.writeFile(wb, 'relatorio-consumo.xlsx');
+        return;
+    }
+
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
     
@@ -2135,8 +2199,9 @@ async function gerarRelatorioConsumo() {
     doc.save('relatorio-consumo.pdf');
 }
 
-function gerarRelatorioCompras() {
-    exportComprasPDF();
+function gerarRelatorioCompras(formato) {
+    if (formato === 'excel') exportComprasExcel();
+    else exportComprasPDF();
 }
 
 function exportComprasPDF() {
@@ -2863,6 +2928,11 @@ async function criarColaborador() {
     
     if (!email) {
         showToast('Digite o email', 'error');
+        return;
+    }
+    
+    if (!isEmailValido(email)) {
+        showToast('Digite um email válido (ex: nome@empresa.com)', 'error');
         return;
     }
     
