@@ -80,7 +80,8 @@ let estoqueTab = 'todos';  // aba ativa em Estoque: 'todos' | 'baixo' | 'compras
 let comprasDias = 30;      // dias de cobertura (Lista de compras)
 let comprasMargem = 20;    // margem de segurança % (Lista de compras)
 let comprasFiltroTag = 'todas';   // filtro por etiqueta: todas|reposicao|alerta|sugestao
-let comprasOrdem = 'cobertura';   // ordem: cobertura|alfabetica|categoria|comprar
+let comprasFiltroCategoria = 'todas'; // filtro por categoria
+let comprasOrdem = 'cobertura';   // ordem: cobertura|alfabetica|categoria|comprar|etiqueta
 let comprasQtd = {};       // quantidades editadas (itens de sugestão/alerta sem cálculo)
 
 // Cache de dados
@@ -1460,11 +1461,20 @@ function itensCompraFiltradosOrdenados() {
     if (comprasFiltroTag !== 'todas') {
         itens = itens.filter(i => i.origens.includes(comprasFiltroTag));
     }
+    if (comprasFiltroCategoria !== 'todas') {
+        itens = itens.filter(i => (i.categoria || '') === comprasFiltroCategoria);
+    }
+    const ordemEtiqueta = { reposicao: 0, alerta: 1, sugestao: 2 };
     itens.sort((a, b) => {
         switch (comprasOrdem) {
             case 'alfabetica': return a.nome.localeCompare(b.nome);
             case 'categoria':  return (a.categoria || 'zzz').localeCompare(b.categoria || 'zzz') || a.nome.localeCompare(b.nome);
             case 'comprar':    return (b.comprar || 0) - (a.comprar || 0);
+            case 'etiqueta': {
+                const ia = Math.min(...a.origens.map(o => ordemEtiqueta[o]));
+                const ib = Math.min(...b.origens.map(o => ordemEtiqueta[o]));
+                return ia - ib || a.nome.localeCompare(b.nome);
+            }
             default:           return a.diasCobertura - b.diasCobertura; // cobertura
         }
     });
@@ -1472,6 +1482,7 @@ function itensCompraFiltradosOrdenados() {
 }
 
 function setComprasFiltro(tag) { comprasFiltroTag = tag; renderPage(); }
+function setComprasFiltroCategoria(cat) { comprasFiltroCategoria = cat; renderPage(); }
 function setComprasOrdem(ordem) { comprasOrdem = ordem; renderPage(); }
 function setCompraQtd(key, valor) {
     const n = parseInt(valor);
@@ -1480,6 +1491,8 @@ function setCompraQtd(key, valor) {
 
 function renderComprasConteudo() {
     const itens = itensCompraFiltradosOrdenados();
+
+    const categoriasUnicas = [...new Set(montarItensCompra().map(i => i.categoria).filter(Boolean))].sort();
 
     const filtros = `
         <div class="card mb-4">
@@ -1494,23 +1507,37 @@ function renderComprasConteudo() {
                     </select>
                 </div>
                 <div class="config-item">
-                    <label>Ordenar por</label>
+                    <label>Filtrar por categoria</label>
+                    <select class="form-input" onchange="setComprasFiltroCategoria(this.value)">
+                        <option value="todas" ${comprasFiltroCategoria === 'todas' ? 'selected' : ''}>Todas</option>
+                        ${categoriasUnicas.map(c => `<option value="${c}" ${comprasFiltroCategoria === c ? 'selected' : ''}>${c}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="config-item">
+                    <label>Organizar por</label>
                     <select class="form-input" onchange="setComprasOrdem(this.value)">
                         <option value="cobertura" ${comprasOrdem === 'cobertura' ? 'selected' : ''}>Dias de cobertura (mais urgente)</option>
                         <option value="alfabetica" ${comprasOrdem === 'alfabetica' ? 'selected' : ''}>Ordem alfabética</option>
                         <option value="categoria" ${comprasOrdem === 'categoria' ? 'selected' : ''}>Categoria</option>
                         <option value="comprar" ${comprasOrdem === 'comprar' ? 'selected' : ''}>Quantidade a comprar</option>
+                        <option value="etiqueta" ${comprasOrdem === 'etiqueta' ? 'selected' : ''}>Etiqueta</option>
                     </select>
                 </div>
+            </div>
+
+            <div class="config-grid" style="margin-top:12px; align-items:end;">
                 <div class="config-item">
                     <label>Dias de Cobertura</label>
-                    <input type="number" id="dias-cobertura" value="${comprasDias}" min="1" onchange="setComprasConfig()">
+                    <input type="number" id="dias-cobertura" value="${comprasDias}" min="1">
                     <small>Estoque para quantos dias</small>
                 </div>
                 <div class="config-item">
                     <label>Margem de Segurança</label>
-                    <input type="number" id="margem-seguranca" value="${comprasMargem}" min="0" onchange="setComprasConfig()">
+                    <input type="number" id="margem-seguranca" value="${comprasMargem}" min="0">
                     <small>% adicional</small>
+                </div>
+                <div class="config-item">
+                    <button class="btn btn-primary" style="width:100%;" onclick="setComprasConfig()">🔄 Recalcular</button>
                 </div>
             </div>
         </div>
