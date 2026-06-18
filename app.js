@@ -79,6 +79,9 @@ let filtroEstoqueBaixo = false;
 let estoqueTab = 'todos';  // aba ativa em Estoque: 'todos' | 'baixo' | 'compras'
 let comprasDias = 30;      // dias de cobertura (Lista de compras)
 let comprasMargem = 20;    // margem de segurança % (Lista de compras)
+let comprasFiltroTag = 'todas';   // filtro por etiqueta: todas|reposicao|alerta|sugestao
+let comprasOrdem = 'cobertura';   // ordem: cobertura|alfabetica|categoria|comprar
+let comprasQtd = {};       // quantidades editadas (itens de sugestão/alerta sem cálculo)
 
 // Cache de dados
 let cache = {
@@ -378,6 +381,7 @@ async function initApp() {
             loadCategorias(),
             loadProdutos(),
             loadAlertas(),
+            loadSugestoes(),
             loadAvaliacoes()
         ]);
         
@@ -1095,7 +1099,7 @@ function renderSugestaoItem(s, showActions) {
     const statusBadge = {
         pendente: '<span class="badge badge-warning">Pendente</span>',
         aprovada: '<span class="badge badge-success">Aprovada</span>',
-        rejeitada: '<span class="badge badge-danger">Rejeitada</span>'
+        recusada: '<span class="badge badge-danger">Recusada</span>'
     };
     
     return `
@@ -1113,7 +1117,7 @@ function renderSugestaoItem(s, showActions) {
                 ${showActions ? `
                     <div style="margin-top: 8px; display: flex; gap: 8px;">
                         <button class="btn btn-success btn-sm" onclick="respondSugestao(${s.id}, 'aprovada')" style="padding: 6px 12px;">✓</button>
-                        <button class="btn btn-danger btn-sm" onclick="respondSugestao(${s.id}, 'rejeitada')" style="padding: 6px 12px;">✗</button>
+                        <button class="btn btn-danger btn-sm" onclick="respondSugestao(${s.id}, 'recusada')" style="padding: 6px 12px;">✗</button>
                     </div>
                 ` : ''}
             </div>
@@ -1136,7 +1140,7 @@ async function respondSugestao(id, status) {
         
         if (error) throw error;
         
-        showToast(status === 'aprovada' ? 'Sugestão aprovada!' : 'Sugestão rejeitada', 'success');
+        showToast(status === 'aprovada' ? 'Sugestão aprovada! Adicionada à lista de compras.' : 'Sugestão recusada', 'success');
         await loadSugestoes();
         renderPage();
     } catch (error) {
@@ -1150,8 +1154,9 @@ async function respondSugestao(id, status) {
 // ============================================
 function renderAlertas() {
     const isAdmin = currentProfile?.role === 'admin';
-    const pendentes = cache.alertas.filter(a => !a.resolvido);
-    const resolvidos = cache.alertas.filter(a => a.resolvido);
+    const st = (a) => a.status || (a.resolvido ? 'aceito' : 'pendente');
+    const pendentes = cache.alertas.filter(a => st(a) === 'pendente');
+    const processados = cache.alertas.filter(a => st(a) !== 'pendente');
     
     return `
         <div class="page-header">
@@ -1173,10 +1178,10 @@ function renderAlertas() {
             </div>
         ` : ''}
         
-        ${resolvidos.length > 0 ? `
+        ${processados.length > 0 ? `
             <div class="card">
-                <div class="card-title">✅ Resolvidos</div>
-                ${resolvidos.slice(0, 10).map(a => renderAlertaItem(a, false)).join('')}
+                <div class="card-title">📋 Processados</div>
+                ${processados.slice(0, 15).map(a => renderAlertaItem(a, false)).join('')}
             </div>
         ` : ''}
         
@@ -1192,9 +1197,23 @@ function renderAlertas() {
 
 function renderAlertaItem(a, showActions) {
     const urgenciaClass = { baixo: 'baixa', medio: 'media', alto: 'alta' };
-    
+    const status = a.status || (a.resolvido ? 'aceito' : 'pendente');
+
+    let statusHtml = '';
+    if (status === 'aceito') {
+        statusHtml = `<span class="badge badge-success" style="white-space:nowrap;">✓ Adicionado à lista de compras</span>`;
+    } else if (status === 'recusado') {
+        statusHtml = `<span class="badge badge-danger">Recusado</span>`;
+    }
+
+    const acoes = (showActions && status === 'pendente') ? `
+        <div style="margin-top: 8px; display: flex; gap: 8px; justify-content:flex-end;">
+            <button class="btn btn-success btn-sm" onclick="aceitarAlerta(${a.id})" style="padding: 6px 12px;" title="Adicionar à lista de compras">✓</button>
+            <button class="btn btn-danger btn-sm" onclick="recusarAlerta(${a.id})" style="padding: 6px 12px;" title="Recusar">✗</button>
+        </div>` : '';
+
     return `
-        <div class="list-item" style="cursor: default; ${a.resolvido ? 'opacity: 0.6;' : ''}">
+        <div class="list-item" style="cursor: default; ${status === 'recusado' ? 'opacity: 0.6;' : ''}">
             <div class="list-item-icon">${a.produtos?.icone || '⚠️'}</div>
             <div class="list-item-content">
                 <div class="list-item-title">${a.produtos?.nome || 'Alerta Geral'}</div>
@@ -1205,39 +1224,60 @@ function renderAlertaItem(a, showActions) {
             </div>
             <div class="list-item-right">
                 <span class="priority ${urgenciaClass[a.urgencia]}">${a.urgencia}</span>
-                ${showActions && !a.resolvido ? `
-                    <button class="btn btn-success btn-sm mt-2" onclick="resolveAlerta(${a.id})" style="padding: 6px 12px;">Resolver</button>
-                ` : ''}
+                ${statusHtml ? `<div style="margin-top:6px;">${statusHtml}</div>` : ''}
+                ${acoes}
             </div>
         </div>
     `;
 }
 
-async function resolveAlerta(id) {
+async function aceitarAlerta(id) {
     const userId = await getCurrentUserId();
     if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
     try {
         const { error } = await supabaseClient
             .from('alertas')
             .update({
+                status: 'aceito',
                 resolvido: true,
                 resolvido_por: userId,
                 resolvido_em: new Date().toISOString()
             })
             .eq('id', id);
-        
-        if (error) throw error;
-        
-        showToast('Alerta resolvido!', 'success');
+        if (error) { console.error('Erro Supabase aceitarAlerta:', error); throw error; }
+        showToast('Adicionado à lista de compras!', 'success');
         await loadAlertas();
         updateBadges();
         renderPage();
     } catch (error) {
-        console.error('Erro:', error);
-        showToast('Erro ao resolver alerta', 'error');
+        console.error('Erro ao aceitar alerta:', error);
+        showToast('Erro ao aceitar: ' + (error.message || 'verifique o console'), 'error');
     }
 }
 
+async function recusarAlerta(id) {
+    const userId = await getCurrentUserId();
+    if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
+    try {
+        const { error } = await supabaseClient
+            .from('alertas')
+            .update({
+                status: 'recusado',
+                resolvido: true,
+                resolvido_por: userId,
+                resolvido_em: new Date().toISOString()
+            })
+            .eq('id', id);
+        if (error) { console.error('Erro Supabase recusarAlerta:', error); throw error; }
+        showToast('Alerta recusado', 'success');
+        await loadAlertas();
+        updateBadges();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao recusar alerta:', error);
+        showToast('Erro ao recusar: ' + (error.message || 'verifique o console'), 'error');
+    }
+}
 // ============================================
 // RENDERIZAÇÃO - ENTRADA DE ESTOQUE
 // ============================================
@@ -1335,71 +1375,195 @@ function renderFornecedores() {
 // ============================================
 // RENDERIZAÇÃO - LISTA DE COMPRAS
 // ============================================
-function renderComprasConteudo() {
-    const diasCobertura = comprasDias;
-    const margemPct = comprasMargem;
-    const margemFator = 1 + margemPct / 100;
+// Etiquetas (origem) dos itens de compra
+const COMPRA_TAGS = {
+    reposicao: { label: 'Reposição', cor: '#2563eb', bg: 'rgba(37,99,235,0.12)' },
+    alerta:    { label: 'Alerta',    cor: '#d97706', bg: 'rgba(217,119,6,0.14)' },
+    sugestao:  { label: 'Sugestão',  cor: '#7c3aed', bg: 'rgba(124,58,237,0.12)' }
+};
 
-    const itensCompra = cache.produtos
-        .filter(p => p.estoque <= p.estoque_minimo * margemFator)
-        .map(p => {
+// Monta a lista consolidada de itens a comprar, juntando as 3 fontes.
+function montarItensCompra() {
+    const margemFator = 1 + comprasMargem / 100;
+    const mapa = {};
+
+    // 1) Reposição automática (estoque baixo)
+    cache.produtos.forEach(p => {
+        if (p.estoque <= p.estoque_minimo * margemFator) {
             const consumoDiario = p.consumo_diario || 0.5;
-            const necessario = Math.ceil(consumoDiario * diasCobertura);
+            const necessario = Math.ceil(consumoDiario * comprasDias);
             const comprar = Math.max(0, necessario - p.estoque);
-            return { ...p, comprar, consumoDiario };
-        })
-        .filter(p => p.comprar > 0)
-        .sort((a, b) => b.comprar - a.comprar);
+            if (comprar > 0) {
+                const key = 'prod-' + p.id;
+                mapa[key] = {
+                    key, produtoId: p.id, nome: p.nome, icone: p.icone,
+                    categoria: p.categorias?.nome || null,
+                    estoque: p.estoque, consumoDiario, comprar,
+                    diasCobertura: consumoDiario > 0 ? p.estoque / consumoDiario : Infinity,
+                    origens: ['reposicao'], justificativas: [], editavel: false
+                };
+            }
+        }
+    });
 
-    if (itensCompra.length === 0) {
-        return `
-            <div class="empty-state">
-                <div class="icon">✅</div>
-                <h3>Estoque em dia!</h3>
-                <p>Não há necessidade de compras no momento</p>
-            </div>`;
+    // 2) Alertas aceitos
+    cache.alertas.filter(a => a.status === 'aceito').forEach(a => {
+        if (a.produto_id) {
+            const key = 'prod-' + a.produto_id;
+            if (mapa[key]) {
+                if (!mapa[key].origens.includes('alerta')) mapa[key].origens.push('alerta');
+                if (a.descricao) mapa[key].justificativas.push(a.descricao);
+            } else {
+                const p = cache.produtos.find(x => x.id === a.produto_id);
+                if (p) {
+                    const consumoDiario = p.consumo_diario || 0.5;
+                    const necessario = Math.ceil(consumoDiario * comprasDias);
+                    mapa[key] = {
+                        key, produtoId: p.id, nome: p.nome, icone: p.icone,
+                        categoria: p.categorias?.nome || null, estoque: p.estoque,
+                        consumoDiario, comprar: Math.max(1, necessario - p.estoque),
+                        diasCobertura: consumoDiario > 0 ? p.estoque / consumoDiario : Infinity,
+                        origens: ['alerta'], justificativas: a.descricao ? [a.descricao] : [], editavel: false
+                    };
+                }
+            }
+        } else {
+            const key = 'alerta-' + a.id;
+            mapa[key] = {
+                key, produtoId: null, nome: a.produtos?.nome || 'Alerta geral',
+                icone: a.produtos?.icone || '⚠️', categoria: null,
+                estoque: null, consumoDiario: null,
+                comprar: comprasQtd[key] ?? 1, diasCobertura: Infinity,
+                origens: ['alerta'], justificativas: a.descricao ? [a.descricao] : [], editavel: true
+            };
+        }
+    });
+
+    // 3) Sugestões aprovadas (produto novo)
+    cache.sugestoes.filter(s => s.status === 'aprovada').forEach(s => {
+        const key = 'sug-' + s.id;
+        mapa[key] = {
+            key, produtoId: null, nome: s.nome,
+            icone: s.categorias?.icone || '💡',
+            categoria: s.categorias?.nome || null,
+            estoque: null, consumoDiario: null,
+            comprar: comprasQtd[key] ?? 1, diasCobertura: Infinity,
+            origens: ['sugestao'], justificativas: s.justificativa ? [s.justificativa] : [], editavel: true
+        };
+    });
+
+    return Object.values(mapa);
+}
+
+function itensCompraFiltradosOrdenados() {
+    let itens = montarItensCompra();
+    if (comprasFiltroTag !== 'todas') {
+        itens = itens.filter(i => i.origens.includes(comprasFiltroTag));
     }
+    itens.sort((a, b) => {
+        switch (comprasOrdem) {
+            case 'alfabetica': return a.nome.localeCompare(b.nome);
+            case 'categoria':  return (a.categoria || 'zzz').localeCompare(b.categoria || 'zzz') || a.nome.localeCompare(b.nome);
+            case 'comprar':    return (b.comprar || 0) - (a.comprar || 0);
+            default:           return a.diasCobertura - b.diasCobertura; // cobertura
+        }
+    });
+    return itens;
+}
 
-    return `
-        <div class="page-actions mb-4" style="display:flex; gap:8px;">
-            <button class="btn btn-secondary btn-sm" onclick="exportComprasPDF()">📄 PDF</button>
-            <button class="btn btn-secondary btn-sm" onclick="exportComprasExcel()">📊 Excel</button>
-        </div>
+function setComprasFiltro(tag) { comprasFiltroTag = tag; renderPage(); }
+function setComprasOrdem(ordem) { comprasOrdem = ordem; renderPage(); }
+function setCompraQtd(key, valor) {
+    const n = parseInt(valor);
+    comprasQtd[key] = (!isNaN(n) && n >= 0) ? n : 0;
+}
 
+function renderComprasConteudo() {
+    const itens = itensCompraFiltradosOrdenados();
+
+    const filtros = `
         <div class="card mb-4">
-            <div class="card-title">⚙️ Configurações</div>
             <div class="config-grid">
                 <div class="config-item">
+                    <label>Filtrar por etiqueta</label>
+                    <select class="form-input" onchange="setComprasFiltro(this.value)">
+                        <option value="todas" ${comprasFiltroTag === 'todas' ? 'selected' : ''}>Todas</option>
+                        <option value="reposicao" ${comprasFiltroTag === 'reposicao' ? 'selected' : ''}>Reposição</option>
+                        <option value="alerta" ${comprasFiltroTag === 'alerta' ? 'selected' : ''}>Alerta</option>
+                        <option value="sugestao" ${comprasFiltroTag === 'sugestao' ? 'selected' : ''}>Sugestão</option>
+                    </select>
+                </div>
+                <div class="config-item">
+                    <label>Ordenar por</label>
+                    <select class="form-input" onchange="setComprasOrdem(this.value)">
+                        <option value="cobertura" ${comprasOrdem === 'cobertura' ? 'selected' : ''}>Dias de cobertura (mais urgente)</option>
+                        <option value="alfabetica" ${comprasOrdem === 'alfabetica' ? 'selected' : ''}>Ordem alfabética</option>
+                        <option value="categoria" ${comprasOrdem === 'categoria' ? 'selected' : ''}>Categoria</option>
+                        <option value="comprar" ${comprasOrdem === 'comprar' ? 'selected' : ''}>Quantidade a comprar</option>
+                    </select>
+                </div>
+                <div class="config-item">
                     <label>Dias de Cobertura</label>
-                    <input type="number" id="dias-cobertura" value="${diasCobertura}" min="1" onchange="setComprasConfig()">
+                    <input type="number" id="dias-cobertura" value="${comprasDias}" min="1" onchange="setComprasConfig()">
                     <small>Estoque para quantos dias</small>
                 </div>
                 <div class="config-item">
                     <label>Margem de Segurança</label>
-                    <input type="number" id="margem-seguranca" value="${margemPct}" min="0" onchange="setComprasConfig()">
+                    <input type="number" id="margem-seguranca" value="${comprasMargem}" min="0" onchange="setComprasConfig()">
                     <small>% adicional</small>
                 </div>
             </div>
         </div>
-
-        <div id="lista-compras">
-            ${itensCompra.map(p => `
-                <div class="shopping-item">
-                    <div class="shopping-item-icon">${p.icone}</div>
-                    <div class="shopping-item-info">
-                        <div class="shopping-item-name">${p.nome}</div>
-                        <div class="shopping-item-meta">
-                            Estoque: ${p.estoque} • Consumo: ${p.consumoDiario}/${p.unidade}/dia
-                        </div>
-                    </div>
-                    <div class="shopping-item-qty">
-                        <div class="value">${p.comprar}</div>
-                        <div class="unit">${p.unidade}</div>
-                    </div>
-                </div>
-            `).join('')}
-        </div>
     `;
+
+    if (itens.length === 0) {
+        return filtros + `
+            <div class="empty-state">
+                <div class="icon">✅</div>
+                <h3>Nada para comprar</h3>
+                <p>Nenhum item ${comprasFiltroTag !== 'todas' ? 'com essa etiqueta' : 'no momento'}.</p>
+            </div>`;
+    }
+
+    const acoes = `
+        <div class="page-actions mb-4" style="display:flex; gap:8px;">
+            <button class="btn btn-secondary btn-sm" onclick="exportComprasPDF()">📄 PDF</button>
+            <button class="btn btn-secondary btn-sm" onclick="exportComprasExcel()">📊 Excel</button>
+        </div>`;
+
+    const lista = itens.map(item => {
+        const tagsHtml = item.origens.map(o => {
+            const t = COMPRA_TAGS[o];
+            return `<span style="font-size:11px; font-weight:600; color:${t.cor}; background:${t.bg}; padding:2px 8px; border-radius:10px;">${t.label}</span>`;
+        }).join(' ');
+
+        const justi = item.justificativas.length
+            ? `<div style="font-size:13px; color:var(--gray-600); margin-top:4px;"><em>"${item.justificativas.join('" • "')}"</em></div>` : '';
+
+        const info = item.estoque !== null
+            ? `Estoque: ${item.estoque} • ${item.consumoDiario}/${item.unidade || 'un'}/dia • ~${item.diasCobertura === Infinity ? '∞' : Math.round(item.diasCobertura)} dias`
+            : 'Produto novo (sem estoque)';
+
+        const qtdHtml = item.editavel
+            ? `<input type="number" min="0" value="${item.comprar}" onchange="setCompraQtd('${item.key}', this.value)" style="width:64px; text-align:center; padding:6px; border:1px solid var(--gray-300,#ccc); border-radius:8px;">`
+            : `<div class="value" style="font-size:20px; font-weight:700;">${item.comprar}</div>`;
+
+        return `
+            <div class="shopping-item" style="align-items:flex-start;">
+                <div class="shopping-item-icon">${item.icone}</div>
+                <div class="shopping-item-info">
+                    <div class="shopping-item-name">${item.nome} ${tagsHtml}</div>
+                    <div class="shopping-item-meta">${info}</div>
+                    ${justi}
+                </div>
+                <div class="shopping-item-qty" style="text-align:center;">
+                    ${qtdHtml}
+                    <div class="unit" style="font-size:11px; color:var(--gray-500);">comprar</div>
+                </div>
+            </div>`;
+    }).join('');
+
+    return acoes + filtros + `<div id="lista-compras">${lista}</div>`;
 }
 
 // ============================================
@@ -2206,17 +2370,8 @@ function gerarRelatorioCompras(formato) {
 
 function exportComprasPDF() {
     showToast('Gerando PDF...', 'success');
-    
-    const itens = cache.produtos
-        .filter(p => p.estoque <= p.estoque_minimo * 1.2)
-        .map(p => {
-            const consumoDiario = p.consumo_diario || 0.5;
-            const necessario = Math.ceil(consumoDiario * 30);
-            const comprar = Math.max(0, necessario - p.estoque);
-            return { ...p, comprar };
-        })
-        .filter(p => p.comprar > 0);
-    
+    const itens = itensCompraFiltradosOrdenados();
+
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
     
@@ -2225,16 +2380,17 @@ function exportComprasPDF() {
     doc.setFontSize(10);
     doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 14, 30);
     
-    const data = itens.map(p => [
-        p.nome,
-        p.estoque,
-        p.comprar,
-        p.unidade
+    const data = itens.map(i => [
+        i.nome,
+        i.origens.map(o => COMPRA_TAGS[o].label).join(', '),
+        i.estoque !== null ? i.estoque : '-',
+        i.comprar,
+        (i.justificativas[0] || '').slice(0, 40)
     ]);
     
     doc.autoTable({
         startY: 40,
-        head: [['Produto', 'Estoque Atual', 'Comprar', 'Unidade']],
+        head: [['Produto', 'Origem', 'Estoque', 'Comprar', 'Observação']],
         body: data
     });
     
@@ -2243,21 +2399,14 @@ function exportComprasPDF() {
 
 function exportComprasExcel() {
     showToast('Gerando Excel...', 'success');
-    
-    const itens = cache.produtos
-        .filter(p => p.estoque <= p.estoque_minimo * 1.2)
-        .map(p => {
-            const consumoDiario = p.consumo_diario || 0.5;
-            const necessario = Math.ceil(consumoDiario * 30);
-            const comprar = Math.max(0, necessario - p.estoque);
-            return {
-                Produto: p.nome,
-                'Estoque Atual': p.estoque,
-                'Quantidade Comprar': comprar,
-                Unidade: p.unidade
-            };
-        })
-        .filter(p => p['Quantidade Comprar'] > 0);
+    const itens = itensCompraFiltradosOrdenados().map(i => ({
+        Produto: i.nome,
+        Origem: i.origens.map(o => COMPRA_TAGS[o].label).join(', '),
+        'Estoque Atual': i.estoque !== null ? i.estoque : '',
+        'Quantidade Comprar': i.comprar,
+        Categoria: i.categoria || '',
+        'Observação': i.justificativas.join(' | ')
+    }));
     
     const ws = XLSX.utils.json_to_sheet(itens);
     const wb = XLSX.utils.book_new();
