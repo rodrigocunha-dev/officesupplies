@@ -403,17 +403,17 @@ async function initApp() {
         if (apenasAdmin.includes(paginaInicial) && currentProfile?.role !== 'admin') {
             paginaInicial = 'home';
         }
+        // Captura a aba salva ANTES de navigate (que grava 'todos' e apagaria)
+        let abaSalva = 'todos';
+        try { abaSalva = sessionStorage.getItem('estoqueTab') || 'todos'; } catch (e) {}
+
         navigate(paginaInicial);
 
-        // Se voltou para o Estoque, restaura também a aba que estava ativa
-        if (paginaInicial === 'estoque') {
-            try {
-                const aba = sessionStorage.getItem('estoqueTab');
-                if (aba && aba !== 'todos') {
-                    estoqueTab = aba;
-                    renderPage();
-                }
-            } catch (e) {}
+        // Se voltou para o Estoque, restaura a aba que estava ativa
+        if (paginaInicial === 'estoque' && abaSalva !== 'todos') {
+            estoqueTab = abaSalva;
+            try { sessionStorage.setItem('estoqueTab', abaSalva); } catch (e) {}
+            renderPage();
         }
         
         // Setup Push Notifications (não pode travar o app se falhar)
