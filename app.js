@@ -1801,14 +1801,18 @@ async function confirmConsume() {
     const userId = await getCurrentUserId();
     if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
     
+    // Guardar em locais: closeModal() zera selectedProduct/selectedQty
+    const prod = selectedProduct;
+    const qtd = Number(selectedQty);
+    
     try {
         const { error } = await supabaseClient
             .from('movimentacoes')
             .insert({
-                produto_id: Number(selectedProduct.id),
+                produto_id: Number(prod.id),
                 user_id: userId,
                 tipo: 'saida',
-                quantidade: Number(selectedQty)
+                quantidade: qtd
             });
         
         if (error) {
@@ -1817,18 +1821,18 @@ async function confirmConsume() {
         }
         
         // Dar baixa no estoque do produto no banco também
-        const novoEstoque = Math.max(0, selectedProduct.estoque - Number(selectedQty));
+        const novoEstoque = Math.max(0, prod.estoque - qtd);
         const { error: errEstoque } = await supabaseClient
             .from('produtos')
             .update({ estoque: novoEstoque })
-            .eq('id', selectedProduct.id);
+            .eq('id', prod.id);
         if (errEstoque) console.warn('Aviso ao atualizar estoque:', errEstoque);
         
-        showToast(`${selectedQty}x ${selectedProduct.nome} registrado!`, 'success');
+        showToast(`${qtd}x ${prod.nome} registrado!`, 'success');
         closeModal();
         
         // Atualizar cache local
-        const idx = cache.produtos.findIndex(p => p.id === selectedProduct.id);
+        const idx = cache.produtos.findIndex(p => p.id === prod.id);
         if (idx >= 0) {
             cache.produtos[idx].estoque = novoEstoque;
         }
@@ -1943,15 +1947,18 @@ async function confirmEntrada() {
     if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
     
     const obs = document.getElementById('entrada-obs')?.value || '';
+    // Guardar em locais: closeModal() zera selectedProduct/selectedQty
+    const prod = selectedProduct;
+    const qtd = Number(selectedQty);
     
     try {
         const { error } = await supabaseClient
             .from('movimentacoes')
             .insert({
-                produto_id: Number(selectedProduct.id),
+                produto_id: Number(prod.id),
                 user_id: userId,
                 tipo: 'entrada',
-                quantidade: Number(selectedQty),
+                quantidade: qtd,
                 observacao: obs
             });
         
@@ -1961,20 +1968,21 @@ async function confirmEntrada() {
         }
         
         // Atualizar o estoque do produto no banco também
+        const novoEstoque = prod.estoque + qtd;
         const { error: errEstoque } = await supabaseClient
             .from('produtos')
-            .update({ estoque: selectedProduct.estoque + Number(selectedQty) })
-            .eq('id', selectedProduct.id);
+            .update({ estoque: novoEstoque })
+            .eq('id', prod.id);
         
         if (errEstoque) console.warn('Aviso ao atualizar estoque do produto:', errEstoque);
         
-        showToast(`+${selectedQty} ${selectedProduct.nome} adicionado!`, 'success');
+        showToast(`+${qtd} ${prod.nome} adicionado!`, 'success');
         closeModal();
         
         // Atualizar cache local
-        const idx = cache.produtos.findIndex(p => p.id === selectedProduct.id);
+        const idx = cache.produtos.findIndex(p => p.id === prod.id);
         if (idx >= 0) {
-            cache.produtos[idx].estoque += Number(selectedQty);
+            cache.produtos[idx].estoque = novoEstoque;
         }
         
         renderPage();
