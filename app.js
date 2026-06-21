@@ -1100,7 +1100,8 @@ function renderSugestaoItem(s, showActions) {
     const statusBadge = {
         pendente: '<span class="badge badge-warning">Pendente</span>',
         aprovada: '<span class="badge badge-success">Aprovada</span>',
-        recusada: '<span class="badge badge-danger">Recusada</span>'
+        recusada: '<span class="badge badge-danger">Recusada</span>',
+        comprada: '<span class="badge badge-success">✓ Comprada</span>'
     };
     
     return `
@@ -1203,6 +1204,8 @@ function renderAlertaItem(a, showActions) {
     let statusHtml = '';
     if (status === 'aceito') {
         statusHtml = `<span class="badge badge-success" style="white-space:nowrap;">✓ Adicionado à lista de compras</span>`;
+    } else if (status === 'comprado') {
+        statusHtml = `<span class="badge badge-success" style="white-space:nowrap;">✓ Comprado</span>`;
     } else if (status === 'recusado') {
         statusHtml = `<span class="badge badge-danger">Recusado</span>`;
     }
@@ -1489,6 +1492,180 @@ function setCompraQtd(key, valor) {
     comprasQtd[key] = (!isNaN(n) && n >= 0) ? n : 0;
 }
 
+// ----- Fluxo "Comprei" (fecha o ciclo de compras) -----
+function comprarItem(key) {
+    const item = montarItensCompra().find(i => i.key === key);
+    if (!item) { showToast('Item não encontrado, recarregue a tela.', 'error'); return; }
+
+    if (key.startsWith('sug-')) {
+        // Sugestão de produto novo → abre cadastro pré-preenchido
+        abrirCadastroDeSugestao(parseInt(key.replace('sug-', '')), item);
+        return;
+    }
+    if (!item.produtoId) {
+        // Alerta geral sem produto → só marca como comprado
+        marcarAlertaComprado(parseInt(key.replace('alerta-', '')));
+        return;
+    }
+    // Produto existente → confirma quantidade e dá entrada no estoque
+    abrirConfirmarCompra(item);
+}
+
+function abrirConfirmarCompra(item) {
+    const body = `
+        <p style="color: var(--gray-600); margin-bottom: 12px;">
+            Confirmar a compra de <strong>${item.nome}</strong>? Isso dá entrada no estoque e tira o item da lista.
+        </p>
+        <div class="form-group">
+            <label>Quantidade recebida</label>
+            <input type="number" id="compra-qtd" class="form-input" value="${item.comprar}" min="1">
+        </div>
+    `;
+    const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-success" onclick="confirmarCompraProduto(${item.produtoId})">Confirmar compra</button>
+    `;
+    openModal('Comprei — ' + item.nome, body, footer);
+}
+
+async function confirmarCompraProduto(produtoId) {
+    const qtd = parseInt(document.getElementById('compra-qtd')?.value) || 0;
+    if (qtd <= 0) { showToast('Informe a quantidade recebida', 'error'); return; }
+    const userId = await getCurrentUserId();
+    if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
+
+    try {
+        const { error } = await supabaseClient.rpc('registrar_movimentacao', {
+            p_produto_id: Number(produtoId),
+            p_user_id: userId,
+            p_tipo: 'entrada',
+            p_quantidade: qtd,
+            p_observacao: 'Compra registrada'
+        });
+        if (error) { console.error('Erro Supabase confirmarCompraProduto:', error); throw error; }
+
+        // Marca alertas aceitos desse produto como comprado (saem da lista)
+        await supabaseClient.from('alertas')
+            .update({ status: 'comprado' })
+            .eq('produto_id', produtoId)
+            .eq('status', 'aceito');
+
+        showToast('Compra registrada! Estoque atualizado.', 'success');
+        closeModal();
+        await loadProdutos();
+        await loadAlertas();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao registrar compra:', error);
+        showToast('Erro ao registrar compra: ' + (error.message || 'verifique o console'), 'error');
+    }
+}
+
+async function marcarAlertaComprado(alertaId) {
+    try {
+        const { error } = await supabaseClient.from('alertas')
+            .update({ status: 'comprado' })
+            .eq('id', alertaId);
+        if (error) { console.error('Erro Supabase marcarAlertaComprado:', error); throw error; }
+        showToast('Item marcado como comprado', 'success');
+        await loadAlertas();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao marcar comprado:', error);
+        showToast('Erro: ' + (error.message || 'verifique o console'), 'error');
+    }
+}
+
+function abrirCadastroDeSugestao(sugId, item) {
+    const body = `
+        <p style="color: var(--gray-600); margin-bottom: 12px;">
+            Cadastre o produto da sugestão para adicioná-lo ao estoque:
+        </p>
+        <div class="form-group">
+            <label>Nome *</label>
+            <input type="text" id="sug-prod-nome" class="form-input" value="${item.nome.replace(/"/g, '&quot;')}">
+        </div>
+        <div class="form-group">
+            <label>Ícone (emoji)</label>
+            <input type="text" id="sug-prod-icone" class="form-input" value="${item.icone || '📦'}" maxlength="2">
+        </div>
+        <div class="form-group">
+            <label>Categoria *</label>
+            <select id="sug-prod-categoria" class="form-input">
+                <option value="">Selecione...</option>
+                ${cache.categorias.map(c => `<option value="${c.id}" ${item.categoria === c.nome ? 'selected' : ''}>${c.icone} ${c.nome}</option>`).join('')}
+            </select>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="form-group">
+                <label>Estoque inicial</label>
+                <input type="number" id="sug-prod-estoque" class="form-input" value="${item.comprar || 0}" min="0">
+            </div>
+            <div class="form-group">
+                <label>Estoque mínimo</label>
+                <input type="number" id="sug-prod-minimo" class="form-input" value="10" min="1">
+            </div>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="form-group">
+                <label>Unidade</label>
+                <select id="sug-prod-unidade" class="form-input">
+                    <option value="un">Unidade (un)</option>
+                    <option value="cx">Caixa (cx)</option>
+                    <option value="pct">Pacote (pct)</option>
+                    <option value="kg">Quilograma (kg)</option>
+                    <option value="lt">Litro (lt)</option>
+                    <option value="mt">Metro (mt)</option>
+                    <option value="rl">Rolo (rl)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Consumo Diário</label>
+                <input type="number" id="sug-prod-consumo" class="form-input" value="1" min="0" step="0.1">
+            </div>
+        </div>
+    `;
+    const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-success" onclick="criarProdutoDeSugestao(${sugId})">Cadastrar e concluir</button>
+    `;
+    openModal('Comprei — novo produto', body, footer);
+}
+
+async function criarProdutoDeSugestao(sugId) {
+    const nome = document.getElementById('sug-prod-nome').value.trim();
+    const categoria = document.getElementById('sug-prod-categoria').value;
+    if (!nome) { showToast('Digite o nome do produto', 'error'); return; }
+    if (!categoria) { showToast('Selecione uma categoria', 'error'); return; }
+
+    const dados = {
+        nome,
+        icone: document.getElementById('sug-prod-icone').value.trim() || '📦',
+        categoria_id: parseInt(categoria),
+        estoque: parseInt(document.getElementById('sug-prod-estoque').value) || 0,
+        estoque_minimo: parseInt(document.getElementById('sug-prod-minimo').value) || 10,
+        unidade: document.getElementById('sug-prod-unidade').value,
+        consumo_diario: parseFloat(document.getElementById('sug-prod-consumo').value) || 1,
+        ativo: true
+    };
+
+    try {
+        const { error } = await supabaseClient.from('produtos').insert(dados);
+        if (error) { console.error('Erro Supabase criarProdutoDeSugestao:', error); throw error; }
+
+        await supabaseClient.from('sugestoes').update({ status: 'comprada' }).eq('id', sugId);
+
+        showToast('Produto cadastrado e sugestão concluída!', 'success');
+        closeModal();
+        await loadProdutos();
+        await loadSugestoes();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao cadastrar produto da sugestão:', error);
+        showToast('Erro ao cadastrar: ' + (error.message || 'verifique o console'), 'error');
+    }
+}
+
 function renderComprasConteudo() {
     const itens = itensCompraFiltradosOrdenados();
 
@@ -1586,6 +1763,7 @@ function renderComprasConteudo() {
                 <div class="shopping-item-qty" style="text-align:center;">
                     ${qtdHtml}
                     <div class="unit" style="font-size:11px; color:var(--gray-500);">comprar</div>
+                    <button class="btn btn-success btn-sm" style="margin-top:6px; padding:6px 10px;" onclick="comprarItem('${item.key}')">✓ Comprei</button>
                 </div>
             </div>`;
     }).join('');
@@ -1627,15 +1805,6 @@ function renderRelatorios() {
                     <div class="list-item-subtitle">Movimentações e consumo por produto</div>
                 </div>
                 ${btns('gerarRelatorioConsumo')}
-            </div>
-            
-            <div class="list-item" style="cursor:default;">
-                <div class="list-item-icon">🛒</div>
-                <div class="list-item-content">
-                    <div class="list-item-title">Lista de Compras</div>
-                    <div class="list-item-subtitle">Itens que precisam ser repostos</div>
-                </div>
-                ${btns('gerarRelatorioCompras')}
             </div>
         </div>
         
@@ -1801,40 +1970,25 @@ async function confirmConsume() {
     const userId = await getCurrentUserId();
     if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
     
-    // Guardar em locais: closeModal() zera selectedProduct/selectedQty
     const prod = selectedProduct;
     const qtd = Number(selectedQty);
     
     try {
-        const { error } = await supabaseClient
-            .from('movimentacoes')
-            .insert({
-                produto_id: Number(prod.id),
-                user_id: userId,
-                tipo: 'saida',
-                quantidade: qtd
-            });
-        
-        if (error) {
-            console.error('Erro Supabase confirmConsume:', error);
-            throw error;
-        }
-        
-        // Dar baixa no estoque do produto no banco também
-        const novoEstoque = Math.max(0, prod.estoque - qtd);
-        const { error: errEstoque } = await supabaseClient
-            .from('produtos')
-            .update({ estoque: novoEstoque })
-            .eq('id', prod.id);
-        if (errEstoque) console.warn('Aviso ao atualizar estoque:', errEstoque);
+        const { data: novoEstoque, error } = await supabaseClient.rpc('registrar_movimentacao', {
+            p_produto_id: Number(prod.id),
+            p_user_id: userId,
+            p_tipo: 'saida',
+            p_quantidade: qtd,
+            p_observacao: null
+        });
+        if (error) { console.error('Erro Supabase confirmConsume:', error); throw error; }
         
         showToast(`${qtd}x ${prod.nome} registrado!`, 'success');
         closeModal();
         
-        // Atualizar cache local
         const idx = cache.produtos.findIndex(p => p.id === prod.id);
         if (idx >= 0) {
-            cache.produtos[idx].estoque = novoEstoque;
+            cache.produtos[idx].estoque = (typeof novoEstoque === 'number') ? novoEstoque : Math.max(0, prod.estoque - qtd);
         }
         
         renderPage();
@@ -1866,31 +2020,19 @@ async function quickConsume(productId) {
     if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
 
     try {
-        const { error } = await supabaseClient
-            .from('movimentacoes')
-            .insert({
-                produto_id: Number(productId),
-                user_id: userId,
-                tipo: 'saida',
-                quantidade: 1
-            });
-        
+        const { data: novoEstoque, error } = await supabaseClient.rpc('registrar_movimentacao', {
+            p_produto_id: Number(productId),
+            p_user_id: userId,
+            p_tipo: 'saida',
+            p_quantidade: 1,
+            p_observacao: null
+        });
         if (error) { console.error('Erro Supabase quickConsume:', error); throw error; }
-
-        // Dar baixa no estoque do produto no banco (antes só mexia no cache,
-        // por isso voltava ao atualizar a tela)
-        const novoEstoque = Math.max(0, produto.estoque - 1);
-        const { error: errEstoque } = await supabaseClient
-            .from('produtos')
-            .update({ estoque: novoEstoque })
-            .eq('id', productId);
-        if (errEstoque) console.warn('Aviso ao atualizar estoque:', errEstoque);
 
         showToast(`1x ${produto.nome} ✓`, 'success');
 
-        // Atualizar cache local
         const idx = cache.produtos.findIndex(p => p.id === productId);
-        if (idx >= 0) cache.produtos[idx].estoque = novoEstoque;
+        if (idx >= 0) cache.produtos[idx].estoque = (typeof novoEstoque === 'number') ? novoEstoque : Math.max(0, produto.estoque - 1);
 
         renderPage();
     } catch (error) {
@@ -1947,42 +2089,25 @@ async function confirmEntrada() {
     if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
     
     const obs = document.getElementById('entrada-obs')?.value || '';
-    // Guardar em locais: closeModal() zera selectedProduct/selectedQty
     const prod = selectedProduct;
     const qtd = Number(selectedQty);
     
     try {
-        const { error } = await supabaseClient
-            .from('movimentacoes')
-            .insert({
-                produto_id: Number(prod.id),
-                user_id: userId,
-                tipo: 'entrada',
-                quantidade: qtd,
-                observacao: obs
-            });
-        
-        if (error) {
-            console.error('Erro Supabase confirmEntrada:', error);
-            throw error;
-        }
-        
-        // Atualizar o estoque do produto no banco também
-        const novoEstoque = prod.estoque + qtd;
-        const { error: errEstoque } = await supabaseClient
-            .from('produtos')
-            .update({ estoque: novoEstoque })
-            .eq('id', prod.id);
-        
-        if (errEstoque) console.warn('Aviso ao atualizar estoque do produto:', errEstoque);
+        const { data: novoEstoque, error } = await supabaseClient.rpc('registrar_movimentacao', {
+            p_produto_id: Number(prod.id),
+            p_user_id: userId,
+            p_tipo: 'entrada',
+            p_quantidade: qtd,
+            p_observacao: obs || null
+        });
+        if (error) { console.error('Erro Supabase confirmEntrada:', error); throw error; }
         
         showToast(`+${qtd} ${prod.nome} adicionado!`, 'success');
         closeModal();
         
-        // Atualizar cache local
         const idx = cache.produtos.findIndex(p => p.id === prod.id);
         if (idx >= 0) {
-            cache.produtos[idx].estoque = novoEstoque;
+            cache.produtos[idx].estoque = (typeof novoEstoque === 'number') ? novoEstoque : (prod.estoque + qtd);
         }
         
         renderPage();
