@@ -393,15 +393,17 @@ async function initApp() {
         showApp();
         
         // Restaurar a última página visitada (volta pra mesma tela após o F5).
-        // Páginas só de admin caem para 'home' se o usuário não for admin.
-        let paginaInicial = 'home';
+        const isAdmin = currentProfile?.role === 'admin';
+        // Padrão: admin começa no Início (dashboard); colaborador começa em Produtos.
+        let paginaInicial = isAdmin ? 'home' : 'produtos';
         try {
             const salva = sessionStorage.getItem('ultimaPagina');
             if (salva && PAGE_TITLES[salva]) paginaInicial = salva;
         } catch (e) {}
-        const apenasAdmin = ['cadastro-produto', 'colaboradores'];
-        if (apenasAdmin.includes(paginaInicial) && currentProfile?.role !== 'admin') {
-            paginaInicial = 'home';
+        // Páginas exclusivas de admin (incluindo o Início) caem para 'produtos' se colaborador
+        const apenasAdmin = ['home', 'cadastro-produto', 'colaboradores'];
+        if (apenasAdmin.includes(paginaInicial) && !isAdmin) {
+            paginaInicial = 'produtos';
         }
         // Captura a aba salva ANTES de navigate (que grava 'todos' e apagaria)
         let abaSalva = 'todos';
@@ -438,6 +440,12 @@ function updateUserUI() {
     if (adminSection) {
         adminSection.style.display = isAdmin ? 'block' : 'none';
     }
+    
+    // Início (dashboard) é exclusivo do admin; colaborador nem vê no menu
+    const homeSidebar = document.getElementById('sidebar-home');
+    const homeNav = document.getElementById('nav-home');
+    if (homeSidebar) homeSidebar.style.display = isAdmin ? '' : 'none';
+    if (homeNav) homeNav.style.display = isAdmin ? '' : 'none';
 }
 
 async function loadCategorias() {
@@ -567,6 +575,10 @@ async function loadAvaliacoes() {
 // NAVEGAÇÃO
 // ============================================
 function navigate(page) {
+    // Proteção de papel: colaborador não acessa telas de admin (inclusive Início)
+    if (currentProfile?.role !== 'admin' && ['home', 'cadastro-produto', 'colaboradores'].includes(page)) {
+        page = 'produtos';
+    }
     currentPage = page;
     currentCategory = 0;
     searchQuery = '';
@@ -611,6 +623,18 @@ function navigatePegosHoje() {
     document.querySelectorAll('.nav-item').forEach(item => {
         item.classList.toggle('active', item.dataset.page === 'historico');
     });
+    renderPage();
+    document.getElementById('main-content').scrollTop = 0;
+}
+
+function irParaCompras() {
+    estoqueTab = 'compras';
+    try { sessionStorage.setItem('estoqueTab', 'compras'); } catch (e) {}
+    currentPage = 'estoque';
+    try { sessionStorage.setItem('ultimaPagina', 'estoque'); } catch (e) {}
+    document.getElementById('header-title').textContent = PAGE_TITLES['estoque'];
+    document.querySelectorAll('.sidebar-item').forEach(item => item.classList.toggle('active', item.dataset.page === 'estoque'));
+    document.querySelectorAll('.nav-item').forEach(item => item.classList.toggle('active', item.dataset.page === 'estoque'));
     renderPage();
     document.getElementById('main-content').scrollTop = 0;
 }
@@ -715,24 +739,10 @@ function updateBadges() {
 // RENDERIZAÇÃO - HOME
 // ============================================
 async function renderHome() {
-    const hoje = new Date().toISOString().split('T')[0];
-    
-    // Buscar consumo de hoje (com proteção contra erro)
-    let totalConsumo = 0;
-    try {
-        const { data: consumoHoje, error } = await supabaseClient
-            .from('movimentacoes')
-            .select('quantidade')
-            .eq('tipo', 'saida')
-            .gte('created_at', hoje + 'T00:00:00')
-            .lte('created_at', hoje + 'T23:59:59');
-        if (!error) {
-            totalConsumo = (consumoHoje || []).reduce((sum, m) => sum + m.quantidade, 0);
-        }
-    } catch (e) { console.warn('Erro ao buscar consumo de hoje:', e); }
-    
     const estoqueBaixo = cache.produtos.filter(p => p.estoque <= p.estoque_minimo).length;
-    const alertasPendentes = cache.alertas.filter(a => !a.resolvido).length;
+    const alertasPendentes = cache.alertas.filter(a => (a.status || (a.resolvido ? 'aceito' : 'pendente')) === 'pendente').length;
+    const sugestoesPendentes = cache.sugestoes.filter(s => s.status === 'pendente').length;
+    const itensComprar = montarItensCompra().length;
     
     // Buscar últimas movimentações (com proteção contra erro)
     let ultimas = [];
@@ -754,25 +764,25 @@ async function renderHome() {
         </div>
         
         <div class="stats-grid">
-            <div class="stat-card" onclick="navigatePegosHoje()">
-                <div class="stat-icon">🛒</div>
-                <div class="stat-value">${totalConsumo}</div>
-                <div class="stat-label">Pegos hoje</div>
-            </div>
-            <div class="stat-card" onclick="navigate('produtos')">
-                <div class="stat-icon">📦</div>
-                <div class="stat-value">${cache.produtos.length}</div>
-                <div class="stat-label">Produtos</div>
-            </div>
             <div class="stat-card ${estoqueBaixo > 0 ? 'pulse' : ''}" onclick="navigateEstoqueBaixo()">
                 <div class="stat-icon">📉</div>
                 <div class="stat-value" style="color: ${estoqueBaixo > 0 ? 'var(--danger)' : ''}">${estoqueBaixo}</div>
                 <div class="stat-label">Estoque baixo</div>
             </div>
+            <div class="stat-card" onclick="irParaCompras()">
+                <div class="stat-icon">🛒</div>
+                <div class="stat-value">${itensComprar}</div>
+                <div class="stat-label">Itens para comprar</div>
+            </div>
             <div class="stat-card" onclick="navigate('alertas')">
                 <div class="stat-icon">⚠️</div>
                 <div class="stat-value">${alertasPendentes}</div>
-                <div class="stat-label">Alertas</div>
+                <div class="stat-label">Alertas pendentes</div>
+            </div>
+            <div class="stat-card" onclick="navigate('sugestoes')">
+                <div class="stat-icon">💡</div>
+                <div class="stat-value">${sugestoesPendentes}</div>
+                <div class="stat-label">Sugestões pendentes</div>
             </div>
         </div>
         
@@ -780,10 +790,9 @@ async function renderHome() {
             <div class="card">
                 <div class="card-title">⚡ Ações Rápidas</div>
                 <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
-                    <button class="btn btn-primary" onclick="navigate('produtos')">📦 Ver Produtos</button>
-                    <button class="btn btn-secondary" onclick="navigate('estoque')">📊 Ver Estoque</button>
-                    <button class="btn btn-secondary" onclick="openSugestaoModal()">💡 Sugerir</button>
-                    <button class="btn btn-secondary" onclick="openAlertaModal()">⚠️ Alertar</button>
+                    <button class="btn btn-primary" onclick="navigate('produtos')">📦 Pegar produto</button>
+                    <button class="btn btn-secondary" onclick="openSugestaoModal()">💡 Nova sugestão</button>
+                    <button class="btn btn-secondary" onclick="openAlertaModal()">⚠️ Novo alerta</button>
                 </div>
             </div>
             
@@ -2733,6 +2742,11 @@ function renderCadastroProduto() {
             </div>
             
             <div class="form-group">
+                <label>Código interno</label>
+                <input type="text" id="prod-codigo" class="form-input" placeholder="Ex: CAN-001 (opcional)">
+            </div>
+            
+            <div class="form-group">
                 <label>Ícone (emoji)</label>
                 <input type="text" id="prod-icone" class="form-input" placeholder="📦" value="📦" maxlength="2">
             </div>
@@ -2780,6 +2794,18 @@ function renderCadastroProduto() {
             <button class="btn btn-primary" onclick="salvarProduto()">
                 ➕ Cadastrar Produto
             </button>
+        </div>
+        
+        <div class="card">
+            <div class="card-title">📥 Importar catálogo (Excel/CSV)</div>
+            <p style="color: var(--gray-500); font-size: 14px; margin-bottom: 12px;">
+                Cadastre ou atualize vários produtos de uma vez. O sistema casa pelo <strong>código</strong> (ou pelo nome, se não houver código). Produtos novos são criados; existentes têm os dados atualizados — <strong>o estoque de quem já existe não é alterado</strong> por aqui.
+            </p>
+            <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                <button class="btn btn-secondary btn-sm" onclick="baixarModeloImportacao()">⬇️ Baixar modelo</button>
+                <button class="btn btn-primary btn-sm" onclick="document.getElementById('arquivo-import').click()">📂 Escolher arquivo</button>
+            </div>
+            <input type="file" id="arquivo-import" accept=".xlsx,.xls,.csv" style="display:none" onchange="lerArquivoImportacao(event)">
         </div>
         
         <div class="card">
@@ -2835,8 +2861,168 @@ function filterCadastroProdutos(query) {
     `).join('') || '<p style="color:var(--gray-500);padding:12px;">Nenhum produto encontrado.</p>';
 }
 
+// ============================================
+// IMPORTAÇÃO DE CATÁLOGO (Excel / CSV)
+// ============================================
+let importPreview = null;
+
+function baixarModeloImportacao() {
+    const modelo = [{
+        codigo: 'CAN-001',
+        nome: 'Caneta Azul',
+        categoria: 'Escritório',
+        estoque: 50,
+        estoque_minimo: 10,
+        unidade: 'un',
+        consumo_diario: 1
+    }];
+    const ws = XLSX.utils.json_to_sheet(modelo);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Produtos');
+    XLSX.writeFile(wb, 'modelo-importacao-produtos.xlsx');
+}
+
+function lerArquivoImportacao(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+        try {
+            const data = new Uint8Array(e.target.result);
+            const wb = XLSX.read(data, { type: 'array' });
+            const ws = wb.Sheets[wb.SheetNames[0]];
+            const linhas = XLSX.utils.sheet_to_json(ws, { defval: '' });
+            processarPreviaImportacao(linhas);
+        } catch (err) {
+            console.error('Erro ao ler arquivo:', err);
+            showToast('Não foi possível ler o arquivo. Verifique se é um Excel ou CSV válido.', 'error');
+        } finally {
+            event.target.value = '';
+        }
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+function processarPreviaImportacao(linhas) {
+    if (!linhas || linhas.length === 0) {
+        showToast('A planilha está vazia.', 'error');
+        return;
+    }
+    const novos = [], atualizacoes = [], erros = [];
+    linhas.forEach((row, i) => {
+        const get = (k) => {
+            const key = Object.keys(row).find(rk => rk.toLowerCase().trim() === k);
+            return key !== undefined ? String(row[key]).trim() : '';
+        };
+        const nome = get('nome');
+        if (!nome) { erros.push({ linha: i + 2, motivo: 'Sem nome' }); return; }
+        const codigo = get('codigo') || null;
+        const categoria = get('categoria') || null;
+        const item = {
+            codigo, nome, categoria,
+            estoque: parseInt(get('estoque')) || 0,
+            minimo: parseInt(get('estoque_minimo')) || 10,
+            unidade: get('unidade') || 'un',
+            consumo: parseFloat(String(get('consumo_diario')).replace(',', '.')) || 1,
+            existenteId: null
+        };
+        let existente = null;
+        if (codigo) existente = cache.produtos.find(p => (p.codigo || '').toLowerCase() === codigo.toLowerCase());
+        if (!existente) existente = cache.produtos.find(p => p.nome.toLowerCase() === nome.toLowerCase());
+        if (existente) { item.existenteId = existente.id; atualizacoes.push(item); }
+        else novos.push(item);
+    });
+
+    importPreview = { novos, atualizacoes, erros };
+    mostrarPreviaImportacao();
+}
+
+function mostrarPreviaImportacao() {
+    const { novos, atualizacoes, erros } = importPreview;
+    const linha = (i, tipo) => `
+        <div style="display:flex; justify-content:space-between; padding:6px 0; border-bottom:1px solid var(--gray-100,#eee); font-size:13px;">
+            <span>${i.nome} ${i.codigo ? `<span style="color:var(--gray-500)">(${i.codigo})</span>` : ''}</span>
+            <span style="color:var(--gray-500)">${tipo === 'novo' ? 'estoque ' + i.estoque : 'sem mexer no estoque'}</span>
+        </div>`;
+    const bloco = (titulo, arr, tipo, cor) => arr.length ? `
+        <div style="margin-bottom:14px;">
+            <div style="font-weight:600; color:${cor}; margin-bottom:6px;">${titulo} (${arr.length})</div>
+            ${arr.slice(0, 50).map(i => linha(i, tipo)).join('')}
+            ${arr.length > 50 ? `<div style="color:var(--gray-500); font-size:12px; margin-top:4px;">+ ${arr.length - 50} outros…</div>` : ''}
+        </div>` : '';
+
+    const body = `
+        <p style="color: var(--gray-600); margin-bottom: 14px;">Revise antes de confirmar:</p>
+        ${bloco('🆕 Novos produtos', novos, 'novo', 'var(--success)')}
+        ${bloco('♻️ Atualizações', atualizacoes, 'upd', 'var(--primary, #2563eb)')}
+        ${erros.length ? `
+            <div style="margin-bottom:14px;">
+                <div style="font-weight:600; color:var(--danger); margin-bottom:6px;">⚠️ Ignorados (${erros.length})</div>
+                ${erros.slice(0, 20).map(e => `<div style="font-size:13px; color:var(--gray-500);">Linha ${e.linha}: ${e.motivo}</div>`).join('')}
+            </div>` : ''}
+        ${(novos.length === 0 && atualizacoes.length === 0) ? '<p style="color:var(--danger)">Nada para importar.</p>' : ''}
+    `;
+    const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        ${(novos.length || atualizacoes.length) ? '<button class="btn btn-success" onclick="confirmarImportacao()">Confirmar importação</button>' : ''}
+    `;
+    openModal('Prévia da importação', body, footer);
+}
+
+async function confirmarImportacao() {
+    if (!importPreview) return;
+    const { novos, atualizacoes } = importPreview;
+    try {
+        // 1) Criar categorias que ainda não existem
+        const nomesCategorias = [...new Set([...novos, ...atualizacoes].map(i => i.categoria).filter(Boolean))];
+        for (const catNome of nomesCategorias) {
+            const existe = cache.categorias.find(c => c.nome.toLowerCase() === catNome.toLowerCase());
+            if (!existe) {
+                const { error } = await supabaseClient.from('categorias').insert({ nome: catNome, icone: '📦' });
+                if (error && !String(error.message).includes('duplicate')) console.warn('Categoria:', error);
+            }
+        }
+        await loadCategorias();
+        const catId = (nome) => {
+            if (!nome) return null;
+            const c = cache.categorias.find(x => x.nome.toLowerCase() === nome.toLowerCase());
+            return c ? c.id : null;
+        };
+
+        // 2) Inserir novos
+        if (novos.length) {
+            const rows = novos.map(i => ({
+                nome: i.nome, codigo: i.codigo, categoria_id: catId(i.categoria),
+                estoque: i.estoque, estoque_minimo: i.minimo, unidade: i.unidade,
+                consumo_diario: i.consumo, icone: '📦', ativo: true
+            }));
+            const { error } = await supabaseClient.from('produtos').insert(rows);
+            if (error) throw error;
+        }
+
+        // 3) Atualizar existentes — SEM alterar o estoque
+        for (const i of atualizacoes) {
+            const { error } = await supabaseClient.from('produtos').update({
+                nome: i.nome, codigo: i.codigo, categoria_id: catId(i.categoria),
+                estoque_minimo: i.minimo, unidade: i.unidade, consumo_diario: i.consumo
+            }).eq('id', i.existenteId);
+            if (error) throw error;
+        }
+
+        showToast(`Importação concluída: ${novos.length} novos, ${atualizacoes.length} atualizados.`, 'success');
+        importPreview = null;
+        closeModal();
+        await loadProdutos();
+        renderPage();
+    } catch (error) {
+        console.error('Erro na importação:', error);
+        showToast('Erro na importação: ' + (error.message || 'verifique o console'), 'error');
+    }
+}
+
 async function salvarProduto() {
     const nome = document.getElementById('prod-nome').value.trim();
+    const codigo = document.getElementById('prod-codigo').value.trim() || null;
     const icone = document.getElementById('prod-icone').value.trim() || '📦';
     const categoria = document.getElementById('prod-categoria').value;
     const estoque = parseInt(document.getElementById('prod-estoque').value) || 0;
@@ -2859,6 +3045,7 @@ async function salvarProduto() {
             .from('produtos')
             .insert({
                 nome,
+                codigo,
                 icone,
                 categoria_id: parseInt(categoria),
                 estoque,
@@ -2879,6 +3066,7 @@ async function salvarProduto() {
         
         // Limpar formulário
         document.getElementById('prod-nome').value = '';
+        document.getElementById('prod-codigo').value = '';
         document.getElementById('prod-icone').value = '📦';
         document.getElementById('prod-categoria').value = '';
         document.getElementById('prod-estoque').value = '0';
@@ -2889,7 +3077,7 @@ async function salvarProduto() {
         
     } catch (error) {
         console.error('Erro ao cadastrar produto:', error);
-        showToast('Erro ao cadastrar produto', 'error');
+        showToast('Erro ao cadastrar produto: ' + (error.message || ''), 'error');
     }
 }
 
@@ -2901,6 +3089,11 @@ function openEditProdutoModal(produtoId) {
         <div class="form-group">
             <label>Nome do Produto *</label>
             <input type="text" id="edit-prod-nome" class="form-input" value="${produto.nome}">
+        </div>
+        
+        <div class="form-group">
+            <label>Código interno</label>
+            <input type="text" id="edit-prod-codigo" class="form-input" value="${produto.codigo || ''}" placeholder="opcional">
         </div>
         
         <div class="form-group">
@@ -2965,6 +3158,7 @@ function openEditProdutoModal(produtoId) {
 
 async function atualizarProduto(produtoId) {
     const nome = document.getElementById('edit-prod-nome').value.trim();
+    const codigo = document.getElementById('edit-prod-codigo').value.trim() || null;
     const icone = document.getElementById('edit-prod-icone').value.trim();
     const categoria = document.getElementById('edit-prod-categoria').value;
     const minimo = parseInt(document.getElementById('edit-prod-minimo').value);
@@ -2981,6 +3175,7 @@ async function atualizarProduto(produtoId) {
             .from('produtos')
             .update({
                 nome,
+                codigo,
                 icone,
                 categoria_id: parseInt(categoria),
                 estoque_minimo: minimo,
@@ -2997,8 +3192,8 @@ async function atualizarProduto(produtoId) {
         renderPage();
         
     } catch (error) {
-        console.error('Erro:', error);
-        showToast('Erro ao atualizar produto', 'error');
+        console.error('Erro ao atualizar produto:', error);
+        showToast('Erro ao atualizar produto: ' + (error.message || ''), 'error');
     }
 }
 
