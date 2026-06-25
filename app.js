@@ -108,7 +108,8 @@ const PAGE_TITLES = {
     relatorios: 'Relatórios',
     mais: 'Mais Opções',
     'cadastro-produto': 'Cadastrar Produto',
-    'colaboradores': 'Colaboradores'
+    'colaboradores': 'Colaboradores',
+    'categorias': 'Categorias'
 };
 
 // ============================================
@@ -401,7 +402,7 @@ async function initApp() {
             if (salva && PAGE_TITLES[salva]) paginaInicial = salva;
         } catch (e) {}
         // Páginas exclusivas de admin (incluindo o Início) caem para 'produtos' se colaborador
-        const apenasAdmin = ['home', 'cadastro-produto', 'colaboradores'];
+        const apenasAdmin = ['home', 'cadastro-produto', 'colaboradores', 'categorias'];
         if (apenasAdmin.includes(paginaInicial) && !isAdmin) {
             paginaInicial = 'produtos';
         }
@@ -446,6 +447,10 @@ function updateUserUI() {
     const homeNav = document.getElementById('nav-home');
     if (homeSidebar) homeSidebar.style.display = isAdmin ? '' : 'none';
     if (homeNav) homeNav.style.display = isAdmin ? '' : 'none';
+    
+    // Estoque é visão de gestão; colaborador não precisa
+    const estoqueSidebar = document.getElementById('sidebar-estoque');
+    if (estoqueSidebar) estoqueSidebar.style.display = isAdmin ? '' : 'none';
 }
 
 async function loadCategorias() {
@@ -520,16 +525,23 @@ async function loadSugestoes() {
 
 async function loadMovimentacoes() {
     try {
-        const { data, error } = await supabaseClient
+        const isAdmin = currentProfile?.role === 'admin';
+        let query = supabaseClient
             .from('movimentacoes')
             .select(`
                 *,
-                produtos (nome, icone),
+                produtos (nome, icone, categoria_id, categorias (nome)),
                 profiles (nome)
             `)
             .order('created_at', { ascending: false })
-            .limit(100);
-        
+            .limit(300);
+
+        // Colaborador só enxerga as próprias movimentações
+        if (!isAdmin && currentUser?.id) {
+            query = query.eq('user_id', currentUser.id);
+        }
+
+        const { data, error } = await query;
         if (error) throw error;
         cache.movimentacoes = data || [];
     } catch (error) {
@@ -576,7 +588,7 @@ async function loadAvaliacoes() {
 // ============================================
 function navigate(page) {
     // Proteção de papel: colaborador não acessa telas de admin (inclusive Início)
-    if (currentProfile?.role !== 'admin' && ['home', 'cadastro-produto', 'colaboradores'].includes(page)) {
+    if (currentProfile?.role !== 'admin' && ['home', 'cadastro-produto', 'colaboradores', 'categorias'].includes(page)) {
         page = 'produtos';
     }
     currentPage = page;
@@ -702,6 +714,10 @@ async function renderPage() {
             case 'colaboradores':
                 await loadColaboradores();
                 main.innerHTML = renderColaboradores();
+                break;
+            case 'categorias':
+                await loadCategorias();
+                main.innerHTML = renderCategorias();
                 break;
             default:
                 main.innerHTML = renderHome();
@@ -996,34 +1012,95 @@ function renderEstoqueLista(apenasBaixo) {
 }
 // ============================================
 function renderHistorico() {
-    const hoje = new Date().toISOString().split('T')[0];
-    let listaInicial = cache.movimentacoes;
+    const isAdmin = currentProfile?.role === 'admin';
+    let base = cache.movimentacoes;
+    if (!isAdmin) base = base.filter(m => m.user_id === currentUser?.id);
 
-    // Filtro vindo do dashboard "Pegos hoje"
-    if (filtroPegosHoje) {
-        listaInicial = cache.movimentacoes.filter(m =>
-            m.tipo === 'saida' && m.created_at && m.created_at.startsWith(hoje)
-        );
-    }
+    const categorias = [...new Set(cache.produtos.map(p => p.categorias?.nome).filter(Boolean))].sort();
+    const usuarios = [];
+    const seen = {};
+    base.forEach(m => {
+        if (m.user_id && !seen[m.user_id]) { seen[m.user_id] = 1; usuarios.push({ id: m.user_id, nome: m.profiles?.nome || '—' }); }
+    });
 
     return `
         <div class="page-header">
             <div class="page-title">Histórico</div>
-            <div class="page-subtitle">${filtroPegosHoje ? 'Produtos pegos hoje' : cache.movimentacoes.length + ' movimentações'}</div>
+            <div class="page-subtitle">${isAdmin ? 'Todas as movimentações' : 'Suas movimentações'}</div>
         </div>
-        
-        <div class="tabs">
-            <button class="tab ${!filtroPegosHoje ? 'active' : ''}" onclick="filterHistorico('todos', this)">Todos</button>
-            <button class="tab" onclick="filterHistorico('entrada', this)">Entradas</button>
-            <button class="tab ${filtroPegosHoje ? 'active' : ''}" onclick="filterHistorico('saida', this)">Saídas</button>
+
+        <div class="card mb-4">
+            <div class="config-grid">
+                <div class="config-item">
+                    <label>Buscar produto</label>
+                    <input type="text" id="hist-busca" class="form-input" placeholder="Nome do produto" oninput="aplicarFiltrosHistorico()">
+                </div>
+                <div class="config-item">
+                    <label>Categoria</label>
+                    <select id="hist-categoria" class="form-input" onchange="aplicarFiltrosHistorico()">
+                        <option value="">Todas</option>
+                        ${categorias.map(c => `<option>${c}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="config-item">
+                    <label>De</label>
+                    <input type="date" id="hist-data-ini" class="form-input" onchange="aplicarFiltrosHistorico()">
+                </div>
+                <div class="config-item">
+                    <label>Até</label>
+                    <input type="date" id="hist-data-fim" class="form-input" onchange="aplicarFiltrosHistorico()">
+                </div>
+                ${isAdmin ? `
+                <div class="config-item">
+                    <label>Usuário</label>
+                    <select id="hist-usuario" class="form-input" onchange="aplicarFiltrosHistorico()">
+                        <option value="">Todos</option>
+                        ${usuarios.map(u => `<option value="${u.id}">${u.nome}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="config-item">
+                    <label>Tipo</label>
+                    <select id="hist-tipo" class="form-input" onchange="aplicarFiltrosHistorico()">
+                        <option value="">Todos</option>
+                        <option value="entrada">Entradas</option>
+                        <option value="saida">Saídas</option>
+                    </select>
+                </div>
+                ` : ''}
+            </div>
         </div>
-        
+
         <div class="card">
             <div class="history-list" id="historico-list">
-                ${renderHistoricoList(listaInicial)}
+                ${renderHistoricoList(base)}
             </div>
         </div>
     `;
+}
+
+function aplicarFiltrosHistorico() {
+    const isAdmin = currentProfile?.role === 'admin';
+    let lista = cache.movimentacoes;
+    if (!isAdmin) lista = lista.filter(m => m.user_id === currentUser?.id);
+
+    const busca = (document.getElementById('hist-busca')?.value || '').toLowerCase();
+    const cat = document.getElementById('hist-categoria')?.value || '';
+    const dataIni = document.getElementById('hist-data-ini')?.value || '';
+    const dataFim = document.getElementById('hist-data-fim')?.value || '';
+    const usuario = document.getElementById('hist-usuario')?.value || '';
+    const tipo = document.getElementById('hist-tipo')?.value || '';
+
+    lista = lista.filter(m => {
+        if (busca && !(m.produtos?.nome || '').toLowerCase().includes(busca)) return false;
+        if (cat && (m.produtos?.categorias?.nome || '') !== cat) return false;
+        if (usuario && m.user_id !== usuario) return false;
+        if (tipo && m.tipo !== tipo) return false;
+        if (dataIni && (m.created_at || '') < dataIni + 'T00:00:00') return false;
+        if (dataFim && (m.created_at || '') > dataFim + 'T23:59:59') return false;
+        return true;
+    });
+
+    document.getElementById('historico-list').innerHTML = renderHistoricoList(lista);
 }
 
 function renderHistoricoList(lista) {
@@ -1049,15 +1126,8 @@ function renderHistoricoList(lista) {
 }
 
 function filterHistorico(tipo, btn) {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    btn.classList.add('active');
-    
-    let filtered = cache.movimentacoes;
-    if (tipo !== 'todos') {
-        filtered = filtered.filter(m => m.tipo === tipo);
-    }
-    
-    document.getElementById('historico-list').innerHTML = renderHistoricoList(filtered);
+    // Mantido por compatibilidade; a filtragem agora é por aplicarFiltrosHistorico()
+    aplicarFiltrosHistorico();
 }
 // ============================================
 // RENDERIZAÇÃO - SUGESTÕES
@@ -1844,10 +1914,11 @@ function renderMais() {
         <div class="card">
             <div class="card-title">📂 Menu</div>
             
+            ${isAdmin ? `
             <div class="sidebar-item" onclick="navigate('estoque')">
                 <span class="icon">📊</span>
                 <span>Estoque</span>
-            </div>
+            </div>` : ''}
             <div class="sidebar-item" onclick="navigate('historico')">
                 <span class="icon">📜</span>
                 <span>Histórico</span>
@@ -1864,6 +1935,10 @@ function renderMais() {
                     <div class="sidebar-item" onclick="navigate('fornecedores')">
                         <span class="icon">🏪</span>
                         <span>Fornecedores</span>
+                    </div>
+                    <div class="sidebar-item" onclick="navigate('categorias')">
+                        <span class="icon">🏷️</span>
+                        <span>Categorias</span>
                     </div>
                     <div class="sidebar-item" onclick="navigate('relatorios')">
                         <span class="icon">📈</span>
@@ -1885,7 +1960,8 @@ function renderMais() {
                 <span class="badge ${isAdmin ? 'badge-info' : 'badge-success'}">${isAdmin ? 'Admin' : 'Colaborador'}</span>
             </div>
             
-            <button class="btn btn-danger mt-4" onclick="confirmLogout()">Sair da Conta</button>
+            <button class="btn btn-secondary mt-4" onclick="openPerfilModal()">⚙️ Meu Perfil</button>
+            <button class="btn btn-danger mt-2" onclick="confirmLogout()">Sair da Conta</button>
         </div>
     `;
 }
@@ -2439,7 +2515,104 @@ function confirmLogout() {
 }
 
 function showUserMenu() {
-    confirmLogout();
+    const body = `
+        <div class="list-item" style="cursor:pointer" onclick="closeModal(); openPerfilModal()">
+            <div class="list-item-icon">⚙️</div>
+            <div class="list-item-content">
+                <div class="list-item-title">Meu Perfil</div>
+                <div class="list-item-subtitle">Alterar nome e senha</div>
+            </div>
+        </div>
+        <div class="list-item" style="cursor:pointer" onclick="closeModal(); confirmLogout()">
+            <div class="list-item-icon">🚪</div>
+            <div class="list-item-content">
+                <div class="list-item-title">Sair</div>
+            </div>
+        </div>
+    `;
+    openModal('Conta', body, null);
+}
+
+// ----- Perfil do usuário -----
+function openPerfilModal() {
+    const body = `
+        <div class="form-group">
+            <label>Nome de usuário *</label>
+            <input type="text" id="perfil-nome" class="form-input" value="${(currentProfile?.nome || '').replace(/"/g, '&quot;')}">
+        </div>
+        <div class="form-group">
+            <label>E-mail de login</label>
+            <input type="email" class="form-input" value="${currentUser?.email || ''}" disabled style="opacity:0.7;">
+            <small style="color: var(--gray-500); display:block; margin-top:4px;">Para alterar o e-mail, fale com um administrador.</small>
+        </div>
+        <div style="border-top:1px solid var(--gray-200); margin-top:8px; padding-top:12px;">
+            <p style="color: var(--gray-500); font-size: 14px; margin-bottom: 10px;">Alterar senha (opcional)</p>
+            <div class="form-group">
+                <label>Nova senha</label>
+                <input type="password" id="perfil-senha" class="form-input" placeholder="Mínimo 6 caracteres">
+            </div>
+            <div class="form-group">
+                <label>Confirmar nova senha</label>
+                <input type="password" id="perfil-senha2" class="form-input" placeholder="Repita a nova senha">
+            </div>
+        </div>
+    `;
+    const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="salvarPerfil()">Salvar</button>
+    `;
+    openModal('Meu Perfil', body, footer);
+}
+
+async function nomeEmUso(nome, exceptId) {
+    try {
+        const { data, error } = await supabaseClient.from('profiles').select('id').ilike('nome', nome);
+        if (error) { console.warn('Erro ao checar nome:', error); return false; }
+        return (data || []).some(p => p.id !== exceptId);
+    } catch (e) { return false; }
+}
+
+async function salvarPerfil() {
+    const nome = document.getElementById('perfil-nome').value.trim();
+    const senha = document.getElementById('perfil-senha').value;
+    const senha2 = document.getElementById('perfil-senha2').value;
+
+    if (!nome) { showToast('Digite o nome de usuário', 'error'); return; }
+
+    // Senha (se preenchida)
+    if (senha || senha2) {
+        if (senha.length < 6) { showToast('A nova senha deve ter no mínimo 6 caracteres', 'error'); return; }
+        if (senha !== senha2) { showToast('As senhas não conferem', 'error'); return; }
+    }
+
+    try {
+        // Nome único (ignora o próprio usuário)
+        if (nome !== currentProfile?.nome && await nomeEmUso(nome, currentUser.id)) {
+            showToast('Esse nome de usuário já está em uso', 'error');
+            return;
+        }
+
+        // Atualiza nome no perfil
+        const { error: errNome } = await supabaseClient
+            .from('profiles')
+            .update({ nome })
+            .eq('id', currentUser.id);
+        if (errNome) { console.error('Erro ao atualizar nome:', errNome); throw errNome; }
+        currentProfile.nome = nome;
+
+        // Atualiza senha, se informada
+        if (senha) {
+            const { error: errSenha } = await supabaseClient.auth.updateUser({ password: senha });
+            if (errSenha) { console.error('Erro ao atualizar senha:', errSenha); throw errSenha; }
+        }
+
+        updateUserUI();
+        showToast('Perfil atualizado!', 'success');
+        closeModal();
+    } catch (error) {
+        console.error('Erro ao salvar perfil:', error);
+        showToast('Erro ao salvar perfil: ' + (error.message || 'verifique o console'), 'error');
+    }
 }
 
 // ============================================
@@ -2716,6 +2889,227 @@ if ('serviceWorker' in navigator) {
 // ============================================
 // CADASTRO DE PRODUTOS (ADMIN)
 // ============================================
+// ============================================
+// GESTÃO DE CATEGORIAS
+// ============================================
+function renderCategorias() {
+    if (currentProfile?.role !== 'admin') {
+        return `<div class="empty-state"><div class="icon">🔒</div><h3>Acesso Restrito</h3><p>Apenas administradores.</p></div>`;
+    }
+
+    const contar = (catId) => cache.produtos.filter(p => p.categoria_id === catId).length;
+
+    return `
+        <div class="page-header">
+            <div class="page-title">Categorias</div>
+            <div class="page-subtitle">Organize os produtos por categoria</div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">🏷️ Nova Categoria</div>
+            <div style="display:grid; grid-template-columns: 80px 1fr; gap:12px; align-items:end;">
+                <div class="form-group" style="margin:0;">
+                    <label>Ícone</label>
+                    <input type="text" id="cat-icone" class="form-input" value="📦" maxlength="2" style="text-align:center;">
+                </div>
+                <div class="form-group" style="margin:0;">
+                    <label>Nome *</label>
+                    <input type="text" id="cat-nome" class="form-input" placeholder="Ex: Limpeza">
+                </div>
+            </div>
+            <button class="btn btn-primary mt-4" onclick="salvarCategoria()">➕ Adicionar Categoria</button>
+        </div>
+
+        <div class="card">
+            <div class="card-title">📋 Categorias (${cache.categorias.length})</div>
+            ${cache.categorias.length === 0 ? `
+                <div class="empty-state"><div class="icon">🏷️</div><p>Nenhuma categoria cadastrada</p></div>
+            ` : cache.categorias.map(c => {
+                const qtd = contar(c.id);
+                return `
+                    <div class="list-item" style="cursor:default;">
+                        <div class="list-item-icon">${c.icone || '📦'}</div>
+                        <div class="list-item-content">
+                            <div class="list-item-title">${c.nome}</div>
+                            <div class="list-item-subtitle">${qtd} ${qtd === 1 ? 'produto' : 'produtos'}</div>
+                        </div>
+                        <div class="list-item-right" style="display:flex; gap:6px;">
+                            <button class="btn btn-secondary btn-sm" onclick="editarCategoria(${c.id})" style="padding:6px 10px;">✏️</button>
+                            <button class="btn btn-danger btn-sm" onclick="excluirCategoria(${c.id})" style="padding:6px 10px;">🗑️</button>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+async function salvarCategoria() {
+    const nome = document.getElementById('cat-nome').value.trim();
+    const icone = document.getElementById('cat-icone').value.trim() || '📦';
+    if (!nome) { showToast('Digite o nome da categoria', 'error'); return; }
+
+    // Evitar duplicada (nome é único no banco)
+    if (cache.categorias.some(c => c.nome.toLowerCase() === nome.toLowerCase())) {
+        showToast('Já existe uma categoria com esse nome', 'error');
+        return;
+    }
+
+    try {
+        const { error } = await supabaseClient.from('categorias').insert({ nome, icone, ativo: true });
+        if (error) { console.error('Erro Supabase salvarCategoria:', error); throw error; }
+        showToast('Categoria adicionada!', 'success');
+        await loadCategorias();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao salvar categoria:', error);
+        const msg = String(error.message || '');
+        showToast(msg.includes('duplicate') ? 'Já existe uma categoria com esse nome' : 'Erro ao salvar: ' + msg, 'error');
+    }
+}
+
+function editarCategoria(catId) {
+    const cat = cache.categorias.find(c => c.id === catId);
+    if (!cat) return;
+    const body = `
+        <div style="display:grid; grid-template-columns: 80px 1fr; gap:12px; align-items:end;">
+            <div class="form-group" style="margin:0;">
+                <label>Ícone</label>
+                <input type="text" id="edit-cat-icone" class="form-input" value="${cat.icone || '📦'}" maxlength="2" style="text-align:center;">
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>Nome *</label>
+                <input type="text" id="edit-cat-nome" class="form-input" value="${(cat.nome || '').replace(/"/g, '&quot;')}">
+            </div>
+        </div>
+    `;
+    const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="atualizarCategoria(${catId})">Salvar</button>
+    `;
+    openModal('Editar Categoria', body, footer);
+}
+
+async function atualizarCategoria(catId) {
+    const nome = document.getElementById('edit-cat-nome').value.trim();
+    const icone = document.getElementById('edit-cat-icone').value.trim() || '📦';
+    if (!nome) { showToast('Digite o nome da categoria', 'error'); return; }
+
+    if (cache.categorias.some(c => c.id !== catId && c.nome.toLowerCase() === nome.toLowerCase())) {
+        showToast('Já existe outra categoria com esse nome', 'error');
+        return;
+    }
+
+    try {
+        const { error } = await supabaseClient.from('categorias').update({ nome, icone }).eq('id', catId);
+        if (error) { console.error('Erro Supabase atualizarCategoria:', error); throw error; }
+        showToast('Categoria atualizada!', 'success');
+        closeModal();
+        await loadCategorias();
+        await loadProdutos();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao atualizar categoria:', error);
+        showToast('Erro ao atualizar: ' + (error.message || ''), 'error');
+    }
+}
+
+function excluirCategoria(catId) {
+    const cat = cache.categorias.find(c => c.id === catId);
+    if (!cat) return;
+    const produtos = cache.produtos.filter(p => p.categoria_id === catId);
+
+    // Sem produtos → confirmação simples
+    if (produtos.length === 0) {
+        const body = `<p>Excluir a categoria <strong>${cat.nome}</strong>?</p>`;
+        const footer = `
+            <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-danger" onclick="confirmarExclusaoCategoria(${catId})">Excluir</button>
+        `;
+        openModal('Excluir Categoria', body, footer);
+        return;
+    }
+
+    // Com produtos → 3 opções
+    const body = `
+        <p>A categoria <strong>${cat.nome}</strong> tem <strong>${produtos.length} ${produtos.length === 1 ? 'produto' : 'produtos'}</strong> vinculado(s).</p>
+        <p style="color: var(--gray-600); margin-top:8px;">O que deseja fazer?</p>
+    `;
+    const footer = `
+        <div style="display:flex; flex-direction:column; gap:8px; width:100%;">
+            <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+            <button class="btn btn-warning" onclick="abrirMoverProdutosCategoria(${catId})">Editar a categoria dos produtos antes</button>
+            <button class="btn btn-danger" onclick="confirmarExclusaoCategoria(${catId})">Excluir e deixar produtos sem categoria</button>
+        </div>
+    `;
+    openModal('Excluir Categoria', body, footer);
+}
+
+function abrirMoverProdutosCategoria(catId) {
+    const cat = cache.categorias.find(c => c.id === catId);
+    const produtos = cache.produtos.filter(p => p.categoria_id === catId);
+    const outras = cache.categorias.filter(c => c.id !== catId);
+
+    if (outras.length === 0) {
+        showToast('Não há outra categoria para mover os produtos. Crie uma antes.', 'error');
+        return;
+    }
+
+    const body = `
+        <p>Mover os <strong>${produtos.length}</strong> produto(s) de <strong>${cat.nome}</strong> para:</p>
+        <div class="form-group" style="margin-top:12px;">
+            <label>Categoria destino</label>
+            <select id="cat-destino" class="form-input">
+                ${outras.map(c => `<option value="${c.id}">${c.icone || '📦'} ${c.nome}</option>`).join('')}
+            </select>
+        </div>
+        <p style="color: var(--gray-500); font-size:13px;">Depois de mover, a categoria <strong>${cat.nome}</strong> será excluída.</p>
+    `;
+    const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="moverProdutosEExcluir(${catId})">Mover e excluir</button>
+    `;
+    openModal('Mover produtos', body, footer);
+}
+
+async function moverProdutosEExcluir(catId) {
+    const destino = parseInt(document.getElementById('cat-destino').value);
+    if (!destino) { showToast('Selecione a categoria destino', 'error'); return; }
+    try {
+        const { error: errMove } = await supabaseClient.from('produtos')
+            .update({ categoria_id: destino })
+            .eq('categoria_id', catId);
+        if (errMove) { console.error('Erro ao mover produtos:', errMove); throw errMove; }
+
+        const { error: errDel } = await supabaseClient.from('categorias').delete().eq('id', catId);
+        if (errDel) { console.error('Erro ao excluir categoria:', errDel); throw errDel; }
+
+        showToast('Produtos movidos e categoria excluída!', 'success');
+        closeModal();
+        await loadCategorias();
+        await loadProdutos();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao mover/excluir:', error);
+        showToast('Erro: ' + (error.message || 'verifique o console'), 'error');
+    }
+}
+
+async function confirmarExclusaoCategoria(catId) {
+    try {
+        const { error } = await supabaseClient.from('categorias').delete().eq('id', catId);
+        if (error) { console.error('Erro Supabase excluirCategoria:', error); throw error; }
+        showToast('Categoria excluída', 'success');
+        closeModal();
+        await loadCategorias();
+        await loadProdutos();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao excluir categoria:', error);
+        showToast('Erro ao excluir: ' + (error.message || 'verifique o console'), 'error');
+    }
+}
+
 function renderCadastroProduto() {
     if (currentProfile?.role !== 'admin') {
         return `
