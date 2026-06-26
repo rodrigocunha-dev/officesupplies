@@ -1746,6 +1746,248 @@ async function criarProdutoDeSugestao(sugId) {
     }
 }
 
+// ============================================
+// IMPORTAÇÃO DE NOTA (XML da NF-e) — Etapa 1
+// ============================================
+let importNotaItens = [];
+
+function dispararImportNota() {
+    const input = document.getElementById('arquivo-nota');
+    if (input) input.click();
+}
+
+async function lerNotaXML(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+        const texto = await file.text();
+        const parser = new DOMParser();
+        const xml = parser.parseFromString(texto, 'application/xml');
+
+        if (xml.getElementsByTagName('parsererror').length > 0) {
+            showToast('Arquivo XML inválido.', 'error');
+            return;
+        }
+
+        const dets = xml.getElementsByTagName('det');
+        if (!dets || dets.length === 0) {
+            showToast('Não encontrei produtos nesse XML. É uma NF-e?', 'error');
+            return;
+        }
+
+        const txt = (parent, tag) => {
+            const el = parent.getElementsByTagName(tag)[0];
+            return el ? (el.textContent || '').trim() : '';
+        };
+
+        const itens = [];
+        for (let i = 0; i < dets.length; i++) {
+            const prod = dets[i].getElementsByTagName('prod')[0];
+            if (!prod) continue;
+            let ean = txt(prod, 'cEAN') || txt(prod, 'cEANTrib');
+            if (/sem\s*gtin/i.test(ean)) ean = '';
+            itens.push({
+                idx: i,
+                codigoFornecedor: txt(prod, 'cProd'),
+                ean: ean,
+                descricao: txt(prod, 'xProd'),
+                quantidade: Math.max(1, Math.round(parseFloat(txt(prod, 'qCom').replace(',', '.')) || 0)),
+                produtoId: null,
+                origem: null
+            });
+        }
+
+        // Carregar vínculos aprendidos
+        await loadVinculosNf();
+        casarItensNota(itens);
+        importNotaItens = itens;
+        mostrarPreviaNota();
+    } catch (err) {
+        console.error('Erro ao ler XML da nota:', err);
+        showToast('Não foi possível ler o arquivo: ' + (err.message || ''), 'error');
+    } finally {
+        event.target.value = '';
+    }
+}
+
+async function loadVinculosNf() {
+    try {
+        const { data, error } = await supabaseClient.from('vinculos_nf').select('*');
+        if (error) { console.warn('Erro ao carregar vínculos:', error); cache.vinculosNf = []; return; }
+        cache.vinculosNf = data || [];
+    } catch (e) { cache.vinculosNf = []; }
+}
+
+function casarItensNota(itens) {
+    const vinculos = cache.vinculosNf || [];
+    itens.forEach(item => {
+        item.produtoId = null;
+        item.origem = null;
+        // 1) por EAN no produto
+        if (item.ean) {
+            const p = cache.produtos.find(x => (x.ean || '') === item.ean);
+            if (p) { item.produtoId = p.id; item.origem = 'ean'; return; }
+        }
+        // 2) por vínculo aprendido (EAN ou código do fornecedor)
+        const v = vinculos.find(v =>
+            (item.ean && v.codigo_nf === item.ean) ||
+            (item.codigoFornecedor && v.codigo_nf === item.codigoFornecedor)
+        );
+        if (v) {
+            const p = cache.produtos.find(x => x.id === v.produto_id);
+            if (p) { item.produtoId = p.id; item.origem = 'vinculo'; }
+        }
+    });
+}
+
+function nomeProduto(id) {
+    const p = cache.produtos.find(x => x.id === id);
+    return p ? `${p.icone || '📦'} ${p.nome}` : '—';
+}
+
+function mostrarPreviaNota() {
+    const reconhecidos = importNotaItens.filter(i => i.produtoId);
+    const desconhecidos = importNotaItens.filter(i => !i.produtoId);
+
+    const linhaRec = (i) => `
+        <div style="padding:8px 0; border-bottom:1px solid var(--gray-100,#eee); font-size:13px;">
+            <div style="display:flex; justify-content:space-between; gap:8px;">
+                <span><strong>${nomeProduto(i.produtoId)}</strong></span>
+                <span style="color:var(--success); white-space:nowrap;">+${i.quantidade}</span>
+            </div>
+            <div style="color:var(--gray-500);">Nota: ${i.descricao}${i.ean ? ' • EAN ' + i.ean : ''}</div>
+        </div>`;
+
+    const linhaDesc = (i) => `
+        <div style="padding:8px 0; border-bottom:1px solid var(--gray-100,#eee); font-size:13px;">
+            <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
+                <span>${i.descricao}<br><span style="color:var(--gray-500);">${i.ean ? 'EAN ' + i.ean : 'sem EAN'} • Qtd ${i.quantidade}</span></span>
+                <button class="btn btn-secondary btn-sm" style="white-space:nowrap;" onclick="abrirVincularItemNota(${i.idx})">Vincular</button>
+            </div>
+        </div>`;
+
+    const body = `
+        <p style="color: var(--gray-600); margin-bottom: 12px;">
+            ${reconhecidos.length} reconhecido(s) · ${desconhecidos.length} não reconhecido(s).
+            Os não vinculados serão ignorados nesta importação.
+        </p>
+        ${reconhecidos.length ? `
+            <div style="margin-bottom:14px;">
+                <div style="font-weight:600; color:var(--success); margin-bottom:4px;">✓ Reconhecidos (${reconhecidos.length})</div>
+                ${reconhecidos.map(linhaRec).join('')}
+            </div>` : ''}
+        ${desconhecidos.length ? `
+            <div style="margin-bottom:14px;">
+                <div style="font-weight:600; color:var(--gray-600); margin-bottom:4px;">Não reconhecidos (${desconhecidos.length})</div>
+                ${desconhecidos.map(linhaDesc).join('')}
+            </div>` : ''}
+    `;
+    const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        ${reconhecidos.length ? `<button class="btn btn-success" onclick="confirmarImportacaoNota()">Dar entrada (${reconhecidos.length})</button>` : ''}
+    `;
+    openModal('Importar nota (XML)', body, footer);
+}
+
+function abrirVincularItemNota(idx) {
+    const item = importNotaItens.find(i => i.idx === idx);
+    if (!item) return;
+    const produtos = [...cache.produtos].sort((a, b) => a.nome.localeCompare(b.nome));
+    const body = `
+        <p style="color: var(--gray-600); margin-bottom: 10px;">Vincular o item da nota a um produto seu:</p>
+        <div style="background:var(--gray-100,#f5f5f5); padding:8px 10px; border-radius:8px; font-size:13px; margin-bottom:12px;">
+            <strong>${item.descricao}</strong><br>
+            <span style="color:var(--gray-500);">${item.ean ? 'EAN ' + item.ean : 'sem EAN'} • Qtd ${item.quantidade}</span>
+        </div>
+        <div class="form-group">
+            <label>Produto</label>
+            <select id="vinc-produto" class="form-input">
+                <option value="">Selecione...</option>
+                ${produtos.map(p => `<option value="${p.id}">${p.icone || '📦'} ${p.nome}</option>`).join('')}
+            </select>
+        </div>
+        <p style="color: var(--gray-500); font-size:12px;">O vínculo será salvo: nas próximas notas, esse item será reconhecido automaticamente.</p>
+    `;
+    const footer = `
+        <button class="btn btn-secondary" onclick="mostrarPreviaNota()">Voltar</button>
+        <button class="btn btn-primary" onclick="confirmarVinculoItemNota(${idx})">Vincular</button>
+    `;
+    openModal('Vincular item', body, footer);
+}
+
+async function confirmarVinculoItemNota(idx) {
+    const item = importNotaItens.find(i => i.idx === idx);
+    if (!item) return;
+    const produtoId = parseInt(document.getElementById('vinc-produto').value);
+    if (!produtoId) { showToast('Selecione um produto', 'error'); return; }
+
+    try {
+        // Aprender o vínculo: salva o EAN no produto (se houver) e registra de-para
+        if (item.ean) {
+            await supabaseClient.from('produtos').update({ ean: item.ean }).eq('id', produtoId);
+            await supabaseClient.from('vinculos_nf').upsert(
+                { codigo_nf: item.ean, tipo: 'ean', produto_id: produtoId },
+                { onConflict: 'codigo_nf,tipo' }
+            );
+        }
+        if (item.codigoFornecedor) {
+            await supabaseClient.from('vinculos_nf').upsert(
+                { codigo_nf: item.codigoFornecedor, tipo: 'fornecedor', produto_id: produtoId },
+                { onConflict: 'codigo_nf,tipo' }
+            );
+        }
+        await loadProdutos();
+        await loadVinculosNf();
+
+        // Marca como reconhecido na prévia
+        item.produtoId = produtoId;
+        item.origem = 'manual';
+
+        showToast('Vínculo salvo!', 'success');
+        mostrarPreviaNota();
+    } catch (error) {
+        console.error('Erro ao vincular item:', error);
+        showToast('Erro ao vincular: ' + (error.message || 'verifique o console'), 'error');
+    }
+}
+
+async function confirmarImportacaoNota() {
+    const reconhecidos = importNotaItens.filter(i => i.produtoId);
+    if (reconhecidos.length === 0) { showToast('Nenhum item reconhecido para dar entrada.', 'error'); return; }
+    const userId = await getCurrentUserId();
+    if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
+
+    try {
+        for (const item of reconhecidos) {
+            // Soma ao estoque (atômico)
+            const { error } = await supabaseClient.rpc('registrar_movimentacao', {
+                p_produto_id: Number(item.produtoId),
+                p_user_id: userId,
+                p_tipo: 'entrada',
+                p_quantidade: item.quantidade,
+                p_observacao: 'Entrada por nota (XML)'
+            });
+            if (error) { console.error('Erro ao dar entrada (nota):', error); throw error; }
+
+            // Baixa na lista de compras: alertas aceitos desse produto viram comprado
+            await supabaseClient.from('alertas')
+                .update({ status: 'comprado' })
+                .eq('produto_id', item.produtoId)
+                .eq('status', 'aceito');
+        }
+
+        showToast(`Entrada concluída: ${reconhecidos.length} item(ns) atualizados.`, 'success');
+        importNotaItens = [];
+        closeModal();
+        await loadProdutos();
+        await loadAlertas();
+        renderPage();
+    } catch (error) {
+        console.error('Erro na importação da nota:', error);
+        showToast('Erro na importação: ' + (error.message || 'verifique o console'), 'error');
+    }
+}
+
 function renderComprasConteudo() {
     const itens = itensCompraFiltradosOrdenados();
 
@@ -1810,9 +2052,11 @@ function renderComprasConteudo() {
     }
 
     const acoes = `
-        <div class="page-actions mb-4" style="display:flex; gap:8px;">
+        <div class="page-actions mb-4" style="display:flex; gap:8px; flex-wrap:wrap;">
             <button class="btn btn-secondary btn-sm" onclick="exportComprasPDF()">📄 PDF</button>
             <button class="btn btn-secondary btn-sm" onclick="exportComprasExcel()">📊 Excel</button>
+            <button class="btn btn-primary btn-sm" onclick="dispararImportNota()">📥 Importar nota (XML)</button>
+            <input type="file" id="arquivo-nota" accept=".xml" style="display:none" onchange="lerNotaXML(event)">
         </div>`;
 
     const lista = itens.map(item => {
@@ -3207,6 +3451,11 @@ function renderCadastroProduto() {
             </div>
             
             <div class="form-group">
+                <label>Código de barras (EAN)</label>
+                <input type="text" id="prod-ean" class="form-input" placeholder="Ex: 7891234567890 (opcional)">
+            </div>
+            
+            <div class="form-group">
                 <label>Ícone (emoji)</label>
                 <input type="text" id="prod-icone" class="form-input" placeholder="📦" value="📦" maxlength="2">
             </div>
@@ -3269,6 +3518,15 @@ function renderCadastroProduto() {
                 <button class="btn btn-primary btn-sm" onclick="document.getElementById('arquivo-import').click()">📂 Escolher arquivo</button>
             </div>
             <input type="file" id="arquivo-import" accept=".xlsx,.xls,.csv" style="display:none" onchange="lerArquivoImportacao(event)">
+        </div>
+        
+        <div class="card">
+            <div class="card-title">📥 Importar nota (XML da NF-e)</div>
+            <p style="color: var(--gray-500); font-size: 14px; margin-bottom: 12px;">
+                Dá entrada no estoque a partir do XML da nota. Itens reconhecidos (por código de barras ou vínculo já aprendido) entram automaticamente; os não reconhecidos podem ser vinculados a um produto seu na hora.
+            </p>
+            <button class="btn btn-primary btn-sm" onclick="dispararImportNota()">📂 Escolher XML</button>
+            <input type="file" id="arquivo-nota" accept=".xml" style="display:none" onchange="lerNotaXML(event)">
         </div>
         
         <div class="card">
@@ -3486,6 +3744,7 @@ async function confirmarImportacao() {
 async function salvarProduto() {
     const nome = document.getElementById('prod-nome').value.trim();
     const codigo = document.getElementById('prod-codigo').value.trim() || null;
+    const ean = document.getElementById('prod-ean').value.trim() || null;
     const icone = document.getElementById('prod-icone').value.trim() || '📦';
     const categoria = document.getElementById('prod-categoria').value;
     const estoque = parseInt(document.getElementById('prod-estoque').value) || 0;
@@ -3509,6 +3768,7 @@ async function salvarProduto() {
             .insert({
                 nome,
                 codigo,
+                ean,
                 icone,
                 categoria_id: parseInt(categoria),
                 estoque,
@@ -3530,6 +3790,7 @@ async function salvarProduto() {
         // Limpar formulário
         document.getElementById('prod-nome').value = '';
         document.getElementById('prod-codigo').value = '';
+        document.getElementById('prod-ean').value = '';
         document.getElementById('prod-icone').value = '📦';
         document.getElementById('prod-categoria').value = '';
         document.getElementById('prod-estoque').value = '0';
@@ -3557,6 +3818,11 @@ function openEditProdutoModal(produtoId) {
         <div class="form-group">
             <label>Código interno</label>
             <input type="text" id="edit-prod-codigo" class="form-input" value="${produto.codigo || ''}" placeholder="opcional">
+        </div>
+        
+        <div class="form-group">
+            <label>Código de barras (EAN)</label>
+            <input type="text" id="edit-prod-ean" class="form-input" value="${produto.ean || ''}" placeholder="opcional">
         </div>
         
         <div class="form-group">
@@ -3622,6 +3888,7 @@ function openEditProdutoModal(produtoId) {
 async function atualizarProduto(produtoId) {
     const nome = document.getElementById('edit-prod-nome').value.trim();
     const codigo = document.getElementById('edit-prod-codigo').value.trim() || null;
+    const ean = document.getElementById('edit-prod-ean').value.trim() || null;
     const icone = document.getElementById('edit-prod-icone').value.trim();
     const categoria = document.getElementById('edit-prod-categoria').value;
     const minimo = parseInt(document.getElementById('edit-prod-minimo').value);
@@ -3639,6 +3906,7 @@ async function atualizarProduto(produtoId) {
             .update({
                 nome,
                 codigo,
+                ean,
                 icone,
                 categoria_id: parseInt(categoria),
                 estoque_minimo: minimo,
