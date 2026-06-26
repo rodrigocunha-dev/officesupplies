@@ -432,7 +432,7 @@ function updateUserUI() {
     const inicial = nome.charAt(0).toUpperCase();
     const isAdmin = currentProfile?.role === 'admin';
     
-    document.getElementById('user-name').textContent = nome.split(' ')[0];
+    document.getElementById('user-name').textContent = nome;
     document.getElementById('user-role').textContent = isAdmin ? 'Administrador' : 'Colaborador';
     document.getElementById('user-avatar').textContent = inicial;
     
@@ -1095,8 +1095,9 @@ function aplicarFiltrosHistorico() {
         if (cat && (m.produtos?.categorias?.nome || '') !== cat) return false;
         if (usuario && m.user_id !== usuario) return false;
         if (tipo && m.tipo !== tipo) return false;
-        if (dataIni && (m.created_at || '') < dataIni + 'T00:00:00') return false;
-        if (dataFim && (m.created_at || '') > dataFim + 'T23:59:59') return false;
+        const dia = dataLocalISO(m.created_at); // dia no fuso de Brasília
+        if (dataIni && dia < dataIni) return false;
+        if (dataFim && dia > dataFim) return false;
         return true;
     });
 
@@ -2671,7 +2672,7 @@ async function gerarRelatorioConsumo(formato) {
             Tipo: m.tipo === 'entrada' ? 'Entrada' : 'Saída',
             Quantidade: m.quantidade,
             'Usuário': m.profiles?.nome || '-',
-            Data: new Date(m.created_at).toLocaleString('pt-BR')
+            Data: new Date(m.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
         }));
         const ws = XLSX.utils.json_to_sheet(dados);
         const wb = XLSX.utils.book_new();
@@ -2693,7 +2694,7 @@ async function gerarRelatorioConsumo(formato) {
         m.tipo === 'entrada' ? 'Entrada' : 'Saída',
         m.quantidade,
         m.profiles?.nome || '-',
-        new Date(m.created_at).toLocaleString('pt-BR')
+        new Date(m.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
     ]);
     
     doc.autoTable({
@@ -2780,7 +2781,7 @@ function exportarTudoExcel() {
         Tipo: m.tipo,
         Quantidade: m.quantidade,
         Usuário: m.profiles?.nome || '-',
-        Data: new Date(m.created_at).toLocaleString('pt-BR')
+        Data: new Date(m.created_at).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
     }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(movData), 'Movimentações');
     
@@ -2852,6 +2853,15 @@ function sendNotification(title, body) {
 // ============================================
 // UTILITÁRIOS
 // ============================================
+// Retorna a data no formato AAAA-MM-DD no fuso de Brasília (para filtros por dia)
+function dataLocalISO(dateStr) {
+    try {
+        return new Date(dateStr).toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+    } catch (e) {
+        return (dateStr || '').split('T')[0];
+    }
+}
+
 function formatDate(dateStr) {
     const date = new Date(dateStr);
     const now = new Date();
@@ -2862,7 +2872,7 @@ function formatDate(dateStr) {
     if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
     if (diff < 604800000) return `${Math.floor(diff / 86400000)}d`;
     
-    return date.toLocaleDateString('pt-BR');
+    return date.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 }
 
 function showToast(message, type = '') {
@@ -2965,6 +2975,62 @@ async function salvarCategoria() {
         console.error('Erro ao salvar categoria:', error);
         const msg = String(error.message || '');
         showToast(msg.includes('duplicate') ? 'Já existe uma categoria com esse nome' : 'Erro ao salvar: ' + msg, 'error');
+    }
+}
+
+function abrirNovaCategoriaRapida() {
+    const body = `
+        <div style="display:grid; grid-template-columns:80px 1fr; gap:12px; align-items:end;">
+            <div class="form-group" style="margin:0;">
+                <label>Ícone</label>
+                <input type="text" id="quick-cat-icone" class="form-input" value="📦" maxlength="2" style="text-align:center;">
+            </div>
+            <div class="form-group" style="margin:0;">
+                <label>Nome *</label>
+                <input type="text" id="quick-cat-nome" class="form-input" placeholder="Ex: Limpeza">
+            </div>
+        </div>
+    `;
+    const footer = `
+        <button class="btn btn-secondary" onclick="closeModal()">Cancelar</button>
+        <button class="btn btn-primary" onclick="salvarCategoriaRapida()">Criar e selecionar</button>
+    `;
+    openModal('Nova categoria', body, footer);
+}
+
+async function salvarCategoriaRapida() {
+    const nome = document.getElementById('quick-cat-nome').value.trim();
+    const icone = document.getElementById('quick-cat-icone').value.trim() || '📦';
+    if (!nome) { showToast('Digite o nome da categoria', 'error'); return; }
+    if (cache.categorias.some(c => c.nome.toLowerCase() === nome.toLowerCase())) {
+        showToast('Já existe uma categoria com esse nome', 'error');
+        return;
+    }
+    try {
+        const { data, error } = await supabaseClient
+            .from('categorias')
+            .insert({ nome, icone, ativo: true })
+            .select()
+            .single();
+        if (error) { console.error('Erro Supabase salvarCategoriaRapida:', error); throw error; }
+
+        await loadCategorias();
+        closeModal();
+
+        // Acrescenta a opção ao select e já seleciona, sem recarregar a tela
+        // (preserva o que o usuário já preencheu no formulário do produto)
+        const sel = document.getElementById('prod-categoria');
+        if (sel) {
+            const opt = document.createElement('option');
+            opt.value = data.id;
+            opt.textContent = `${icone} ${nome}`;
+            sel.appendChild(opt);
+            sel.value = data.id;
+        }
+        showToast('Categoria criada e selecionada!', 'success');
+    } catch (error) {
+        console.error('Erro ao criar categoria rápida:', error);
+        showToast('Erro ao criar categoria: ' + (error.message || ''), 'error');
     }
 }
 
@@ -3147,10 +3213,13 @@ function renderCadastroProduto() {
             
             <div class="form-group">
                 <label>Categoria *</label>
-                <select id="prod-categoria" class="form-input">
-                    <option value="">Selecione...</option>
-                    ${cache.categorias.map(c => `<option value="${c.id}">${c.icone} ${c.nome}</option>`).join('')}
-                </select>
+                <div style="display:flex; gap:8px;">
+                    <select id="prod-categoria" class="form-input" style="flex:1;">
+                        <option value="">Selecione...</option>
+                        ${cache.categorias.map(c => `<option value="${c.id}">${c.icone} ${c.nome}</option>`).join('')}
+                    </select>
+                    <button class="btn btn-secondary" onclick="abrirNovaCategoriaRapida()" title="Nova categoria" style="padding:0 16px; font-size:20px; line-height:1;">+</button>
+                </div>
             </div>
             
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
