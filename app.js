@@ -3213,12 +3213,12 @@ function renderCadastroProduto() {
             
             <div class="form-group">
                 <label>Categoria *</label>
-                <div style="display:flex; gap:8px;">
-                    <select id="prod-categoria" class="form-input" style="flex:1;">
+                <div style="display:flex; gap:8px; align-items:stretch;">
+                    <select id="prod-categoria" class="form-input" style="flex:1 1 auto; min-width:0;">
                         <option value="">Selecione...</option>
                         ${cache.categorias.map(c => `<option value="${c.id}">${c.icone} ${c.nome}</option>`).join('')}
                     </select>
-                    <button class="btn btn-secondary" onclick="abrirNovaCategoriaRapida()" title="Nova categoria" style="padding:0 16px; font-size:20px; line-height:1;">+</button>
+                    <button type="button" class="btn btn-secondary" onclick="abrirNovaCategoriaRapida()" title="Nova categoria" style="flex:0 0 48px; width:48px; padding:0; font-size:22px; line-height:1;">+</button>
                 </div>
             </div>
             
