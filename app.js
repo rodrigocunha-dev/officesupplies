@@ -1851,9 +1851,12 @@ function mostrarPreviaNota() {
 
     const linhaRec = (i) => `
         <div style="padding:8px 0; border-bottom:1px solid var(--gray-100,#eee); font-size:13px;">
-            <div style="display:flex; justify-content:space-between; gap:8px;">
+            <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
                 <span><strong>${nomeProduto(i.produtoId)}</strong></span>
-                <span style="color:var(--success); white-space:nowrap;">+${i.quantidade}</span>
+                <span style="display:flex; gap:8px; align-items:center; white-space:nowrap;">
+                    <span style="color:var(--success);">+${i.quantidade}</span>
+                    <button class="btn btn-secondary btn-sm" style="padding:4px 8px;" onclick="abrirVincularItemNota(${i.idx})">trocar</button>
+                </span>
             </div>
             <div style="color:var(--gray-500);">Nota: ${i.descricao}${i.ean ? ' • EAN ' + i.ean : ''}</div>
         </div>`;
@@ -1862,7 +1865,10 @@ function mostrarPreviaNota() {
         <div style="padding:8px 0; border-bottom:1px solid var(--gray-100,#eee); font-size:13px;">
             <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
                 <span>${i.descricao}<br><span style="color:var(--gray-500);">${i.ean ? 'EAN ' + i.ean : 'sem EAN'} • Qtd ${i.quantidade}</span></span>
-                <button class="btn btn-secondary btn-sm" style="white-space:nowrap;" onclick="abrirVincularItemNota(${i.idx})">Vincular</button>
+                <span style="display:flex; gap:6px; white-space:nowrap;">
+                    <button class="btn btn-secondary btn-sm" style="padding:4px 8px;" onclick="abrirVincularItemNota(${i.idx})">Vincular</button>
+                    <button class="btn btn-primary btn-sm" style="padding:4px 8px;" onclick="abrirCriarProdutoNota(${i.idx})">Criar</button>
+                </span>
             </div>
         </div>`;
 
@@ -1924,6 +1930,8 @@ async function confirmarVinculoItemNota(idx) {
     try {
         // Aprender o vínculo: salva o EAN no produto (se houver) e registra de-para
         if (item.ean) {
+            // Garante que o EAN fique só no produto escolhido (corrige vínculo trocado)
+            await supabaseClient.from('produtos').update({ ean: null }).eq('ean', item.ean).neq('id', produtoId);
             await supabaseClient.from('produtos').update({ ean: item.ean }).eq('id', produtoId);
             await supabaseClient.from('vinculos_nf').upsert(
                 { codigo_nf: item.ean, tipo: 'ean', produto_id: produtoId },
@@ -1951,6 +1959,120 @@ async function confirmarVinculoItemNota(idx) {
     }
 }
 
+function abrirCriarProdutoNota(idx) {
+    const item = importNotaItens.find(i => i.idx === idx);
+    if (!item) return;
+    const body = `
+        <div class="form-group">
+            <label>Nome *</label>
+            <input type="text" id="nota-prod-nome" class="form-input" value="${(item.descricao || '').replace(/"/g, '&quot;')}">
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="form-group">
+                <label>Código de barras (EAN)</label>
+                <input type="text" id="nota-prod-ean" class="form-input" value="${item.ean || ''}">
+            </div>
+            <div class="form-group">
+                <label>Estoque inicial</label>
+                <input type="number" id="nota-prod-estoque" class="form-input" value="${item.quantidade}" min="0">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Categoria *</label>
+            <select id="nota-prod-categoria" class="form-input">
+                <option value="">Selecione...</option>
+                ${cache.categorias.map(c => `<option value="${c.id}">${c.icone} ${c.nome}</option>`).join('')}
+            </select>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="form-group">
+                <label>Estoque mínimo</label>
+                <input type="number" id="nota-prod-minimo" class="form-input" value="10" min="1">
+            </div>
+            <div class="form-group">
+                <label>Consumo diário</label>
+                <input type="number" id="nota-prod-consumo" class="form-input" value="1" min="0" step="0.1">
+            </div>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+            <div class="form-group">
+                <label>Unidade</label>
+                <select id="nota-prod-unidade" class="form-input">
+                    <option value="un">Unidade (un)</option>
+                    <option value="cx">Caixa (cx)</option>
+                    <option value="pct">Pacote (pct)</option>
+                    <option value="kg">Quilograma (kg)</option>
+                    <option value="lt">Litro (lt)</option>
+                    <option value="mt">Metro (mt)</option>
+                    <option value="rl">Rolo (rl)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Ícone</label>
+                <input type="text" id="nota-prod-icone" class="form-input" value="📦" maxlength="2" style="text-align:center;">
+            </div>
+        </div>
+    `;
+    const footer = `
+        <button class="btn btn-secondary" onclick="mostrarPreviaNota()">Voltar</button>
+        <button class="btn btn-success" onclick="criarProdutoDaNota(${idx})">Criar e voltar</button>
+    `;
+    openModal('Criar produto da nota', body, footer);
+}
+
+async function criarProdutoDaNota(idx) {
+    const item = importNotaItens.find(i => i.idx === idx);
+    if (!item) return;
+    const nome = document.getElementById('nota-prod-nome').value.trim();
+    const categoria = document.getElementById('nota-prod-categoria').value;
+    const ean = document.getElementById('nota-prod-ean').value.trim() || null;
+    const estoqueInicial = Math.max(0, parseInt(document.getElementById('nota-prod-estoque').value) || 0);
+
+    if (!nome) { showToast('Digite o nome do produto', 'error'); return; }
+    if (!categoria) { showToast('Selecione uma categoria', 'error'); return; }
+
+    try {
+        // Cria com estoque 0; a quantidade entra como movimentação no "Confirmar"
+        // (assim a entrada fica registrada no histórico e não há contagem dupla)
+        const { data, error } = await supabaseClient.from('produtos').insert({
+            nome,
+            ean,
+            icone: document.getElementById('nota-prod-icone').value.trim() || '📦',
+            categoria_id: parseInt(categoria),
+            estoque: 0,
+            estoque_minimo: parseInt(document.getElementById('nota-prod-minimo').value) || 10,
+            unidade: document.getElementById('nota-prod-unidade').value,
+            consumo_diario: parseFloat(document.getElementById('nota-prod-consumo').value) || 1,
+            ativo: true
+        }).select().single();
+        if (error) { console.error('Erro Supabase criarProdutoDaNota:', error); throw error; }
+
+        // Aprende o vínculo para as próximas notas
+        if (ean) {
+            await supabaseClient.from('vinculos_nf').upsert(
+                { codigo_nf: ean, tipo: 'ean', produto_id: data.id }, { onConflict: 'codigo_nf,tipo' });
+        }
+        if (item.codigoFornecedor) {
+            await supabaseClient.from('vinculos_nf').upsert(
+                { codigo_nf: item.codigoFornecedor, tipo: 'fornecedor', produto_id: data.id }, { onConflict: 'codigo_nf,tipo' });
+        }
+
+        await loadProdutos();
+        await loadVinculosNf();
+
+        // Marca como reconhecido; a entrada (estoque inicial) acontece no Confirmar
+        item.produtoId = data.id;
+        item.origem = 'criado';
+        item.quantidade = estoqueInicial;
+
+        showToast('Produto criado!', 'success');
+        mostrarPreviaNota();
+    } catch (error) {
+        console.error('Erro ao criar produto da nota:', error);
+        showToast('Erro ao criar produto: ' + (error.message || 'verifique o console'), 'error');
+    }
+}
+
 async function confirmarImportacaoNota() {
     const reconhecidos = importNotaItens.filter(i => i.produtoId);
     if (reconhecidos.length === 0) { showToast('Nenhum item reconhecido para dar entrada.', 'error'); return; }
@@ -1959,15 +2081,17 @@ async function confirmarImportacaoNota() {
 
     try {
         for (const item of reconhecidos) {
-            // Soma ao estoque (atômico)
-            const { error } = await supabaseClient.rpc('registrar_movimentacao', {
-                p_produto_id: Number(item.produtoId),
-                p_user_id: userId,
-                p_tipo: 'entrada',
-                p_quantidade: item.quantidade,
-                p_observacao: 'Entrada por nota (XML)'
-            });
-            if (error) { console.error('Erro ao dar entrada (nota):', error); throw error; }
+            if (item.quantidade > 0) {
+                // Soma ao estoque (atômico)
+                const { error } = await supabaseClient.rpc('registrar_movimentacao', {
+                    p_produto_id: Number(item.produtoId),
+                    p_user_id: userId,
+                    p_tipo: 'entrada',
+                    p_quantidade: item.quantidade,
+                    p_observacao: 'Entrada por nota (XML)'
+                });
+                if (error) { console.error('Erro ao dar entrada (nota):', error); throw error; }
+            }
 
             // Baixa na lista de compras: alertas aceitos desse produto viram comprado
             await supabaseClient.from('alertas')
