@@ -1791,7 +1791,10 @@ async function lerNotaXML(event) {
                 codigoFornecedor: txt(prod, 'cProd'),
                 ean: ean,
                 descricao: txt(prod, 'xProd'),
+                unidade: txt(prod, 'uCom'),
                 quantidade: Math.max(1, Math.round(parseFloat(txt(prod, 'qCom').replace(',', '.')) || 0)),
+                fator: 1,
+                quantidadeFinal: 0,
                 produtoId: null,
                 origem: null
             });
@@ -1818,25 +1821,50 @@ async function loadVinculosNf() {
     } catch (e) { cache.vinculosNf = []; }
 }
 
+function unidadeDeNota(u) {
+    const map = {
+        un: 'un', und: 'un', unid: 'un', unidade: 'un', pç: 'un', pca: 'un',
+        pc: 'pct', pct: 'pct', pcte: 'pct', pacote: 'pct',
+        cx: 'cx', caixa: 'cx', cxa: 'cx',
+        kg: 'kg', g: 'kg', grama: 'kg',
+        l: 'lt', lt: 'lt', litro: 'lt',
+        m: 'mt', mt: 'mt', metro: 'mt',
+        rl: 'rl', rolo: 'rl', rolos: 'rl'
+    };
+    return map[(u || '').toLowerCase().trim()] || 'un';
+}
+
+function setQtdFinalNota(idx, valor) {
+    const item = importNotaItens.find(i => i.idx === idx);
+    if (!item) return;
+    const n = parseInt(valor);
+    item.quantidadeFinal = (!isNaN(n) && n >= 0) ? n : 0;
+}
+
 function casarItensNota(itens) {
     const vinculos = cache.vinculosNf || [];
     itens.forEach(item => {
         item.produtoId = null;
         item.origem = null;
+        item.fator = 1;
         // 1) por EAN no produto
         if (item.ean) {
             const p = cache.produtos.find(x => (x.ean || '') === item.ean);
-            if (p) { item.produtoId = p.id; item.origem = 'ean'; return; }
+            if (p) { item.produtoId = p.id; item.origem = 'ean'; item.fator = p.fator_embalagem || 1; }
         }
         // 2) por vínculo aprendido (EAN ou código do fornecedor)
-        const v = vinculos.find(v =>
-            (item.ean && v.codigo_nf === item.ean) ||
-            (item.codigoFornecedor && v.codigo_nf === item.codigoFornecedor)
-        );
-        if (v) {
-            const p = cache.produtos.find(x => x.id === v.produto_id);
-            if (p) { item.produtoId = p.id; item.origem = 'vinculo'; }
+        if (!item.produtoId) {
+            const v = vinculos.find(v =>
+                (item.ean && v.codigo_nf === item.ean) ||
+                (item.codigoFornecedor && v.codigo_nf === item.codigoFornecedor)
+            );
+            if (v) {
+                const p = cache.produtos.find(x => x.id === v.produto_id);
+                if (p) { item.produtoId = p.id; item.origem = 'vinculo'; item.fator = p.fator_embalagem || 1; }
+            }
         }
+        // Quantidade final = quantidade da nota × fator da embalagem
+        item.quantidadeFinal = item.quantidade * (item.fator || 1);
     });
 }
 
@@ -1854,11 +1882,11 @@ function mostrarPreviaNota() {
             <div style="display:flex; justify-content:space-between; gap:8px; align-items:center;">
                 <span><strong>${nomeProduto(i.produtoId)}</strong></span>
                 <span style="display:flex; gap:8px; align-items:center; white-space:nowrap;">
-                    <span style="color:var(--success);">+${i.quantidade}</span>
+                    <input type="number" min="0" value="${i.quantidadeFinal}" title="Quantidade que entra no estoque" onchange="setQtdFinalNota(${i.idx}, this.value)" style="width:60px; text-align:center; padding:4px; border:1px solid var(--gray-300,#ccc); border-radius:6px;">
                     <button class="btn btn-secondary btn-sm" style="padding:4px 8px;" onclick="abrirVincularItemNota(${i.idx})">trocar</button>
                 </span>
             </div>
-            <div style="color:var(--gray-500);">Nota: ${i.descricao}${i.ean ? ' • EAN ' + i.ean : ''}</div>
+            <div style="color:var(--gray-500);">Nota: ${i.quantidade} ${i.unidade || ''}${(i.fator > 1) ? ` × ${i.fator} = ${i.quantidade * i.fator} un` : ''} • ${i.descricao}</div>
         </div>`;
 
     const linhaDesc = (i) => `
@@ -1950,6 +1978,9 @@ async function confirmarVinculoItemNota(idx) {
         // Marca como reconhecido na prévia
         item.produtoId = produtoId;
         item.origem = 'manual';
+        const pVinc = cache.produtos.find(x => x.id === produtoId);
+        item.fator = pVinc?.fator_embalagem || 1;
+        item.quantidadeFinal = item.quantidade * item.fator;
 
         showToast('Vínculo salvo!', 'success');
         mostrarPreviaNota();
@@ -1998,19 +2029,17 @@ function abrirCriarProdutoNota(idx) {
             <div class="form-group">
                 <label>Unidade</label>
                 <select id="nota-prod-unidade" class="form-input">
-                    <option value="un">Unidade (un)</option>
-                    <option value="cx">Caixa (cx)</option>
-                    <option value="pct">Pacote (pct)</option>
-                    <option value="kg">Quilograma (kg)</option>
-                    <option value="lt">Litro (lt)</option>
-                    <option value="mt">Metro (mt)</option>
-                    <option value="rl">Rolo (rl)</option>
+                    ${['un', 'cx', 'pct', 'kg', 'lt', 'mt', 'rl'].map(u => `<option value="${u}" ${unidadeDeNota(item.unidade) === u ? 'selected' : ''}>${u}</option>`).join('')}
                 </select>
             </div>
             <div class="form-group">
-                <label>Ícone</label>
-                <input type="text" id="nota-prod-icone" class="form-input" value="📦" maxlength="2" style="text-align:center;">
+                <label>Unid. por embalagem</label>
+                <input type="number" id="nota-prod-fator" class="form-input" value="1" min="1" title="Ex: 1 caixa = 10 unidades → 10">
             </div>
+        </div>
+        <div class="form-group">
+            <label>Ícone</label>
+            <input type="text" id="nota-prod-icone" class="form-input" value="📦" maxlength="2" style="text-align:center;">
         </div>
     `;
     const footer = `
@@ -2027,6 +2056,7 @@ async function criarProdutoDaNota(idx) {
     const categoria = document.getElementById('nota-prod-categoria').value;
     const ean = document.getElementById('nota-prod-ean').value.trim() || null;
     const estoqueInicial = Math.max(0, parseInt(document.getElementById('nota-prod-estoque').value) || 0);
+    const fator = Math.max(1, parseInt(document.getElementById('nota-prod-fator').value) || 1);
 
     if (!nome) { showToast('Digite o nome do produto', 'error'); return; }
     if (!categoria) { showToast('Selecione uma categoria', 'error'); return; }
@@ -2043,6 +2073,7 @@ async function criarProdutoDaNota(idx) {
             estoque_minimo: parseInt(document.getElementById('nota-prod-minimo').value) || 10,
             unidade: document.getElementById('nota-prod-unidade').value,
             consumo_diario: parseFloat(document.getElementById('nota-prod-consumo').value) || 1,
+            fator_embalagem: fator,
             ativo: true
         }).select().single();
         if (error) { console.error('Erro Supabase criarProdutoDaNota:', error); throw error; }
@@ -2063,7 +2094,9 @@ async function criarProdutoDaNota(idx) {
         // Marca como reconhecido; a entrada (estoque inicial) acontece no Confirmar
         item.produtoId = data.id;
         item.origem = 'criado';
+        item.fator = fator;
         item.quantidade = estoqueInicial;
+        item.quantidadeFinal = estoqueInicial;
 
         showToast('Produto criado!', 'success');
         mostrarPreviaNota();
@@ -2081,13 +2114,14 @@ async function confirmarImportacaoNota() {
 
     try {
         for (const item of reconhecidos) {
-            if (item.quantidade > 0) {
+            const qtdEntrada = (typeof item.quantidadeFinal === 'number') ? item.quantidadeFinal : item.quantidade;
+            if (qtdEntrada > 0) {
                 // Soma ao estoque (atômico)
                 const { error } = await supabaseClient.rpc('registrar_movimentacao', {
                     p_produto_id: Number(item.produtoId),
                     p_user_id: userId,
                     p_tipo: 'entrada',
-                    p_quantidade: item.quantidade,
+                    p_quantidade: qtdEntrada,
                     p_observacao: 'Entrada por nota (XML)'
                 });
                 if (error) { console.error('Erro ao dar entrada (nota):', error); throw error; }
@@ -3580,6 +3614,12 @@ function renderCadastroProduto() {
             </div>
             
             <div class="form-group">
+                <label>Unidades por embalagem de compra</label>
+                <input type="number" id="prod-fator" class="form-input" value="1" min="1">
+                <small style="color: var(--gray-500); display:block; margin-top:4px;">Ex: compra em caixa com 10 unidades → 10. Padrão 1.</small>
+            </div>
+            
+            <div class="form-group">
                 <label>Ícone (emoji)</label>
                 <input type="text" id="prod-icone" class="form-input" placeholder="📦" value="📦" maxlength="2">
             </div>
@@ -3869,6 +3909,7 @@ async function salvarProduto() {
     const nome = document.getElementById('prod-nome').value.trim();
     const codigo = document.getElementById('prod-codigo').value.trim() || null;
     const ean = document.getElementById('prod-ean').value.trim() || null;
+    const fator = Math.max(1, parseInt(document.getElementById('prod-fator').value) || 1);
     const icone = document.getElementById('prod-icone').value.trim() || '📦';
     const categoria = document.getElementById('prod-categoria').value;
     const estoque = parseInt(document.getElementById('prod-estoque').value) || 0;
@@ -3899,6 +3940,7 @@ async function salvarProduto() {
                 estoque_minimo: minimo,
                 unidade,
                 consumo_diario: consumo,
+                fator_embalagem: fator,
                 ativo: true
             })
             .select()
@@ -3915,6 +3957,7 @@ async function salvarProduto() {
         document.getElementById('prod-nome').value = '';
         document.getElementById('prod-codigo').value = '';
         document.getElementById('prod-ean').value = '';
+        document.getElementById('prod-fator').value = '1';
         document.getElementById('prod-icone').value = '📦';
         document.getElementById('prod-categoria').value = '';
         document.getElementById('prod-estoque').value = '0';
@@ -3947,6 +3990,11 @@ function openEditProdutoModal(produtoId) {
         <div class="form-group">
             <label>Código de barras (EAN)</label>
             <input type="text" id="edit-prod-ean" class="form-input" value="${produto.ean || ''}" placeholder="opcional">
+        </div>
+        
+        <div class="form-group">
+            <label>Unidades por embalagem de compra</label>
+            <input type="number" id="edit-prod-fator" class="form-input" value="${produto.fator_embalagem || 1}" min="1">
         </div>
         
         <div class="form-group">
@@ -4013,6 +4061,7 @@ async function atualizarProduto(produtoId) {
     const nome = document.getElementById('edit-prod-nome').value.trim();
     const codigo = document.getElementById('edit-prod-codigo').value.trim() || null;
     const ean = document.getElementById('edit-prod-ean').value.trim() || null;
+    const fator = Math.max(1, parseInt(document.getElementById('edit-prod-fator').value) || 1);
     const icone = document.getElementById('edit-prod-icone').value.trim();
     const categoria = document.getElementById('edit-prod-categoria').value;
     const minimo = parseInt(document.getElementById('edit-prod-minimo').value);
@@ -4035,7 +4084,8 @@ async function atualizarProduto(produtoId) {
                 categoria_id: parseInt(categoria),
                 estoque_minimo: minimo,
                 consumo_diario: consumo,
-                unidade
+                unidade,
+                fator_embalagem: fator
             })
             .eq('id', produtoId);
         
