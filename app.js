@@ -109,7 +109,8 @@ const PAGE_TITLES = {
     mais: 'Mais Opções',
     'cadastro-produto': 'Cadastrar Produto',
     'colaboradores': 'Colaboradores',
-    'categorias': 'Categorias'
+    'categorias': 'Categorias',
+    'configuracoes': 'Configurações'
 };
 
 // ============================================
@@ -384,6 +385,7 @@ async function initApp() {
             loadProdutos(),
             loadAlertas(),
             loadSugestoes(),
+            loadConfig(),
             loadAvaliacoes()
         ]);
         
@@ -402,7 +404,7 @@ async function initApp() {
             if (salva && PAGE_TITLES[salva]) paginaInicial = salva;
         } catch (e) {}
         // Páginas exclusivas de admin (incluindo o Início) caem para 'produtos' se colaborador
-        const apenasAdmin = ['home', 'cadastro-produto', 'colaboradores', 'categorias'];
+        const apenasAdmin = ['home', 'cadastro-produto', 'colaboradores', 'categorias', 'configuracoes'];
         if (apenasAdmin.includes(paginaInicial) && !isAdmin) {
             paginaInicial = 'produtos';
         }
@@ -588,7 +590,7 @@ async function loadAvaliacoes() {
 // ============================================
 function navigate(page) {
     // Proteção de papel: colaborador não acessa telas de admin (inclusive Início)
-    if (currentProfile?.role !== 'admin' && ['home', 'cadastro-produto', 'colaboradores', 'categorias'].includes(page)) {
+    if (currentProfile?.role !== 'admin' && ['home', 'cadastro-produto', 'colaboradores', 'categorias', 'configuracoes'].includes(page)) {
         page = 'produtos';
     }
     currentPage = page;
@@ -719,6 +721,12 @@ async function renderPage() {
                 await loadCategorias();
                 main.innerHTML = renderCategorias();
                 break;
+            case 'configuracoes':
+                await loadConfig();
+                await loadProdutos();
+                await calcularConsumos();
+                main.innerHTML = renderConfiguracoes();
+                break;
             default:
                 main.innerHTML = renderHome();
         }
@@ -755,6 +763,7 @@ function updateBadges() {
 // RENDERIZAÇÃO - HOME
 // ============================================
 async function renderHome() {
+    await calcularConsumos();
     const estoqueBaixo = cache.produtos.filter(p => p.estoque <= p.estoque_minimo).length;
     const alertasPendentes = cache.alertas.filter(a => (a.status || (a.resolvido ? 'aceito' : 'pendente')) === 'pendente').length;
     const sugestoesPendentes = cache.sugestoes.filter(s => s.status === 'pendente').length;
@@ -932,6 +941,7 @@ function renderProductCard(p) {
 // ============================================
 async function renderEstoque() {
     const isAdmin = currentProfile?.role === 'admin';
+    await calcularConsumos();
     // Segurança: a aba Compras é exclusiva de admin. Se um colaborador
     // chegar nela de algum jeito, cai em "Todos".
     if (estoqueTab === 'compras' && !isAdmin) estoqueTab = 'todos';
@@ -976,8 +986,9 @@ function setEstoqueTab(tab) {
 
 function renderEstoqueLista(apenasBaixo) {
     let sorted = [...cache.produtos].sort((a, b) => {
-        const diasA = a.consumo_diario > 0 ? a.estoque / a.consumo_diario : 999;
-        const diasB = b.consumo_diario > 0 ? b.estoque / b.consumo_diario : 999;
+        const ca = consumoEfetivo(a), cb = consumoEfetivo(b);
+        const diasA = ca > 0 ? a.estoque / ca : 999;
+        const diasB = cb > 0 ? b.estoque / cb : 999;
         return diasA - diasB;
     });
 
@@ -993,15 +1004,17 @@ function renderEstoqueLista(apenasBaixo) {
     }
 
     return sorted.map(p => {
-        const dias = p.consumo_diario > 0 ? Math.round(p.estoque / p.consumo_diario) : '∞';
+        const consumo = consumoEfetivo(p);
+        const dias = consumo > 0 ? Math.round(p.estoque / consumo) : '∞';
         const isLow = p.estoque <= p.estoque_minimo;
         const valueClass = isLow ? 'danger' : p.estoque <= p.estoque_minimo * 1.5 ? 'warning' : 'success';
+        const manual = p.consumo_modo === 'manual';
         return `
             <div class="list-item" style="cursor: default;">
                 <div class="list-item-icon">${p.icone}</div>
                 <div class="list-item-content">
                     <div class="list-item-title">${p.nome}</div>
-                    <div class="list-item-subtitle">~${p.consumo_diario || 0}/${p.unidade}/dia • Mín: ${p.estoque_minimo}</div>
+                    <div class="list-item-subtitle">~${consumo.toFixed(2)}/${p.unidade}/dia${manual ? ' ✏️' : ''} • Mín: ${p.estoque_minimo}</div>
                 </div>
                 <div class="list-item-right">
                     <div class="list-item-value ${valueClass}">${p.estoque}</div>
@@ -1467,6 +1480,72 @@ const COMPRA_TAGS = {
 };
 
 // Monta a lista consolidada de itens a comprar, juntando as 3 fontes.
+// ============================================
+// CONSUMO MÉDIO (automático pelo histórico)
+// ============================================
+async function loadConfig() {
+    try {
+        const { data, error } = await supabaseClient.from('configuracoes').select('*').eq('id', 1).single();
+        if (error) throw error;
+        cache.config = {
+            periodo: data.consumo_periodo_dias || 30,
+            diasSemana: (data.consumo_dias_semana || '0,1,2,3,4,5,6').split(',').map(n => parseInt(n)).filter(n => !isNaN(n))
+        };
+    } catch (e) {
+        console.warn('Erro ao carregar configurações:', e);
+        cache.config = cache.config || { periodo: 30, diasSemana: [0, 1, 2, 3, 4, 5, 6] };
+    }
+}
+
+function contarDiasConsiderados(periodo, diasSemana) {
+    let count = 0;
+    const hoje = new Date();
+    for (let i = 1; i <= periodo; i++) {
+        const d = new Date(hoje);
+        d.setDate(hoje.getDate() - i);
+        if (diasSemana.includes(d.getDay())) count++;
+    }
+    return count;
+}
+
+async function calcularConsumos() {
+    try {
+        const cfg = cache.config || { periodo: 30, diasSemana: [0, 1, 2, 3, 4, 5, 6] };
+        const periodo = cfg.periodo || 30;
+        const dias = (cfg.diasSemana && cfg.diasSemana.length) ? cfg.diasSemana : [0, 1, 2, 3, 4, 5, 6];
+        const inicio = new Date();
+        inicio.setDate(inicio.getDate() - periodo);
+
+        const { data, error } = await supabaseClient
+            .from('movimentacoes')
+            .select('produto_id, quantidade, tipo, created_at')
+            .eq('tipo', 'saida')
+            .gte('created_at', inicio.toISOString());
+        if (error) throw error;
+
+        const soma = {};
+        (data || []).forEach(m => { soma[m.produto_id] = (soma[m.produto_id] || 0) + m.quantidade; });
+
+        const nDias = contarDiasConsiderados(periodo, dias);
+        const divisor = nDias > 0 ? nDias : periodo;
+
+        cache.consumoCalc = {};
+        Object.keys(soma).forEach(pid => {
+            cache.consumoCalc[pid] = soma[pid] / divisor;
+        });
+    } catch (e) {
+        console.warn('Erro ao calcular consumos:', e);
+        cache.consumoCalc = cache.consumoCalc || {};
+    }
+}
+
+// Consumo diário efetivo de um produto (manual fixo, ou calculado)
+function consumoEfetivo(p) {
+    if ((p.consumo_modo || 'automatico') === 'manual') return p.consumo_diario || 0;
+    const c = cache.consumoCalc ? cache.consumoCalc[p.id] : undefined;
+    return (typeof c === 'number') ? c : 0;
+}
+
 function montarItensCompra() {
     const margemFator = 1 + comprasMargem / 100;
     const mapa = {};
@@ -1474,7 +1553,7 @@ function montarItensCompra() {
     // 1) Reposição automática (estoque baixo)
     cache.produtos.forEach(p => {
         if (p.estoque <= p.estoque_minimo * margemFator) {
-            const consumoDiario = p.consumo_diario || 0.5;
+            const consumoDiario = consumoEfetivo(p);
             const necessario = Math.ceil(consumoDiario * comprasDias);
             const comprar = Math.max(0, necessario - p.estoque);
             if (comprar > 0) {
@@ -1500,7 +1579,7 @@ function montarItensCompra() {
             } else {
                 const p = cache.produtos.find(x => x.id === a.produto_id);
                 if (p) {
-                    const consumoDiario = p.consumo_diario || 0.5;
+                    const consumoDiario = consumoEfetivo(p);
                     const necessario = Math.ceil(consumoDiario * comprasDias);
                     mapa[key] = {
                         key, produtoId: p.id, nome: p.nome, icone: p.icone,
@@ -2342,6 +2421,10 @@ function renderMais() {
                     <div class="sidebar-item" onclick="navigate('categorias')">
                         <span class="icon">🏷️</span>
                         <span>Categorias</span>
+                    </div>
+                    <div class="sidebar-item" onclick="navigate('configuracoes')">
+                        <span class="icon">⚙️</span>
+                        <span>Configurações</span>
                     </div>
                     <div class="sidebar-item" onclick="navigate('relatorios')">
                         <span class="icon">📈</span>
@@ -3304,6 +3387,202 @@ if ('serviceWorker' in navigator) {
 // ============================================
 // GESTÃO DE CATEGORIAS
 // ============================================
+// ============================================
+// CONFIGURAÇÕES (admin) — consumo médio
+// ============================================
+let consumoFiltroModo = 'todos';
+let consumoSelecao = new Set();
+
+const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+function renderConfiguracoes() {
+    if (currentProfile?.role !== 'admin') {
+        return `<div class="empty-state"><div class="icon">🔒</div><h3>Acesso Restrito</h3><p>Apenas administradores.</p></div>`;
+    }
+
+    const cfg = cache.config || { periodo: 30, diasSemana: [0, 1, 2, 3, 4, 5, 6] };
+
+    // Lista de produtos filtrada por modo
+    let produtos = [...cache.produtos];
+    if (consumoFiltroModo === 'automatico') produtos = produtos.filter(p => (p.consumo_modo || 'automatico') !== 'manual');
+    if (consumoFiltroModo === 'manual') produtos = produtos.filter(p => p.consumo_modo === 'manual');
+    produtos.sort((a, b) => a.nome.localeCompare(b.nome));
+
+    const linhaProduto = (p) => {
+        const manual = p.consumo_modo === 'manual';
+        const efetivo = consumoEfetivo(p);
+        const sel = consumoSelecao.has(p.id);
+        return `
+            <div class="list-item" style="cursor:default;">
+                <input type="checkbox" ${sel ? 'checked' : ''} onchange="toggleConsumoSel(${p.id})" style="width:18px; height:18px; margin-right:8px;">
+                <div class="list-item-content">
+                    <div class="list-item-title">${p.icone || '📦'} ${p.nome}</div>
+                    <div class="list-item-subtitle">
+                        Consumo: ${efetivo.toFixed(2)}/dia
+                        <span class="badge ${manual ? 'badge-warning' : 'badge-info'}" style="margin-left:6px;">${manual ? '✏️ manual' : 'automático'}</span>
+                    </div>
+                </div>
+                <div class="list-item-right" style="display:flex; gap:6px; align-items:center;">
+                    <input type="number" id="consumo-ind-${p.id}" value="${manual ? (p.consumo_diario || 0) : efetivo.toFixed(2)}" min="0" step="0.1" style="width:70px; text-align:center; padding:6px; border:1px solid var(--gray-300,#ccc); border-radius:8px;">
+                    <button class="btn btn-secondary btn-sm" style="padding:6px 8px;" title="Definir manual" onclick="salvarConsumoIndividual(${p.id})">✓</button>
+                </div>
+            </div>`;
+    };
+
+    return `
+        <div class="page-header">
+            <div class="page-title">Configurações</div>
+            <div class="page-subtitle">Ajustes do sistema</div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">📊 Cálculo do consumo médio</div>
+            <div class="form-group">
+                <label>Período da média (dias)</label>
+                <input type="number" id="cfg-periodo" class="form-input" value="${cfg.periodo}" min="1">
+                <small style="color: var(--gray-500);">Sobre quantos dias calcular o consumo (ex: 30).</small>
+            </div>
+            <div class="form-group">
+                <label>Dias considerados no cálculo</label>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                    ${DIAS_SEMANA.map((d, i) => `
+                        <label style="display:flex; align-items:center; gap:4px; font-size:14px;">
+                            <input type="checkbox" id="cfg-dia-${i}" ${cfg.diasSemana.includes(i) ? 'checked' : ''}> ${d}
+                        </label>`).join('')}
+                </div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                    <button class="btn btn-secondary btn-sm" onclick="marcarDias('semana')">Dias de semana</button>
+                    <button class="btn btn-secondary btn-sm" onclick="marcarDias('fim')">Fins de semana</button>
+                    <button class="btn btn-secondary btn-sm" onclick="marcarDias('todos')">Todos</button>
+                </div>
+            </div>
+            <button class="btn btn-primary mt-4" onclick="salvarConfig()">Salvar configurações</button>
+        </div>
+
+        <div class="card">
+            <div class="card-title">📦 Consumo dos produtos</div>
+
+            <div class="config-grid" style="margin-bottom:12px;">
+                <div class="config-item">
+                    <label>Filtrar por modo</label>
+                    <select class="form-input" onchange="setFiltroConsumoModo(this.value)">
+                        <option value="todos" ${consumoFiltroModo === 'todos' ? 'selected' : ''}>Todos</option>
+                        <option value="automatico" ${consumoFiltroModo === 'automatico' ? 'selected' : ''}>Automáticos</option>
+                        <option value="manual" ${consumoFiltroModo === 'manual' ? 'selected' : ''}>Manuais</option>
+                    </select>
+                </div>
+            </div>
+
+            <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid var(--gray-200,#eee);">
+                <button class="btn btn-secondary btn-sm" onclick="toggleConsumoSelTodos()">Selecionar todos</button>
+                <span style="color:var(--gray-500); font-size:13px;">${consumoSelecao.size} selecionado(s)</span>
+                <div style="flex:1;"></div>
+                <input type="number" id="consumo-massa-valor" placeholder="valor" min="0" step="0.1" style="width:80px; text-align:center; padding:6px; border:1px solid var(--gray-300,#ccc); border-radius:8px;">
+                <button class="btn btn-primary btn-sm" onclick="aplicarManualEmMassa()">Aplicar manual</button>
+                <button class="btn btn-secondary btn-sm" onclick="voltarAutomaticoSelecionados()">Voltar p/ automático</button>
+            </div>
+
+            ${produtos.length === 0 ? '<div class="empty-state"><p>Nenhum produto.</p></div>' : produtos.map(linhaProduto).join('')}
+        </div>
+    `;
+}
+
+function marcarDias(tipo) {
+    const set = (i, v) => { const el = document.getElementById('cfg-dia-' + i); if (el) el.checked = v; };
+    if (tipo === 'semana') { [0, 6].forEach(i => set(i, false)); [1, 2, 3, 4, 5].forEach(i => set(i, true)); }
+    else if (tipo === 'fim') { [1, 2, 3, 4, 5].forEach(i => set(i, false)); [0, 6].forEach(i => set(i, true)); }
+    else { [0, 1, 2, 3, 4, 5, 6].forEach(i => set(i, true)); }
+}
+
+async function salvarConfig() {
+    const periodo = Math.max(1, parseInt(document.getElementById('cfg-periodo').value) || 30);
+    const dias = [];
+    for (let i = 0; i < 7; i++) { if (document.getElementById('cfg-dia-' + i)?.checked) dias.push(i); }
+    if (dias.length === 0) { showToast('Selecione ao menos um dia', 'error'); return; }
+    try {
+        const { error } = await supabaseClient.from('configuracoes').update({
+            consumo_periodo_dias: periodo,
+            consumo_dias_semana: dias.join(','),
+            updated_at: new Date().toISOString()
+        }).eq('id', 1);
+        if (error) throw error;
+        await loadConfig();
+        showToast('Configurações salvas!', 'success');
+    } catch (error) {
+        console.error('Erro ao salvar config:', error);
+        showToast('Erro ao salvar: ' + (error.message || ''), 'error');
+    }
+}
+
+function setFiltroConsumoModo(v) { consumoFiltroModo = v; renderPage(); }
+function toggleConsumoSel(id) {
+    if (consumoSelecao.has(id)) consumoSelecao.delete(id); else consumoSelecao.add(id);
+    renderPage();
+}
+function toggleConsumoSelTodos() {
+    let produtos = [...cache.produtos];
+    if (consumoFiltroModo === 'automatico') produtos = produtos.filter(p => (p.consumo_modo || 'automatico') !== 'manual');
+    if (consumoFiltroModo === 'manual') produtos = produtos.filter(p => p.consumo_modo === 'manual');
+    const todosSelecionados = produtos.every(p => consumoSelecao.has(p.id));
+    if (todosSelecionados) produtos.forEach(p => consumoSelecao.delete(p.id));
+    else produtos.forEach(p => consumoSelecao.add(p.id));
+    renderPage();
+}
+
+async function aplicarManualEmMassa() {
+    const valor = parseFloat(document.getElementById('consumo-massa-valor').value);
+    if (isNaN(valor) || valor < 0) { showToast('Informe um valor válido', 'error'); return; }
+    if (consumoSelecao.size === 0) { showToast('Selecione ao menos um produto', 'error'); return; }
+    try {
+        const ids = Array.from(consumoSelecao);
+        const { error } = await supabaseClient.from('produtos')
+            .update({ consumo_modo: 'manual', consumo_diario: valor })
+            .in('id', ids);
+        if (error) throw error;
+        showToast(`${ids.length} produto(s) definido(s) como manual`, 'success');
+        await loadProdutos();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao aplicar manual em massa:', error);
+        showToast('Erro: ' + (error.message || ''), 'error');
+    }
+}
+
+async function voltarAutomaticoSelecionados() {
+    if (consumoSelecao.size === 0) { showToast('Selecione ao menos um produto', 'error'); return; }
+    try {
+        const ids = Array.from(consumoSelecao);
+        const { error } = await supabaseClient.from('produtos')
+            .update({ consumo_modo: 'automatico' })
+            .in('id', ids);
+        if (error) throw error;
+        showToast(`${ids.length} produto(s) voltaram para automático`, 'success');
+        await loadProdutos();
+        await calcularConsumos();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao voltar automático:', error);
+        showToast('Erro: ' + (error.message || ''), 'error');
+    }
+}
+
+async function salvarConsumoIndividual(id) {
+    const valor = parseFloat(document.getElementById('consumo-ind-' + id).value);
+    if (isNaN(valor) || valor < 0) { showToast('Valor inválido', 'error'); return; }
+    try {
+        const { error } = await supabaseClient.from('produtos')
+            .update({ consumo_modo: 'manual', consumo_diario: valor })
+            .eq('id', id);
+        if (error) throw error;
+        showToast('Consumo manual definido', 'success');
+        await loadProdutos();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao salvar consumo individual:', error);
+        showToast('Erro: ' + (error.message || ''), 'error');
+    }
+}
+
 function renderCategorias() {
     if (currentProfile?.role !== 'admin') {
         return `<div class="empty-state"><div class="icon">🔒</div><h3>Acesso Restrito</h3><p>Apenas administradores.</p></div>`;
@@ -3662,8 +3941,13 @@ function renderCadastroProduto() {
                 </div>
                 
                 <div class="form-group">
-                    <label>Consumo Diário Estimado</label>
-                    <input type="number" id="prod-consumo" class="form-input" placeholder="1" min="0" step="0.1" value="1">
+                    <label>Consumo diário</label>
+                    <select id="prod-consumo-modo" class="form-input" onchange="document.getElementById('prod-consumo').disabled = (this.value !== 'manual')">
+                        <option value="automatico">Automático (calculado pelo histórico)</option>
+                        <option value="manual">Manual (valor fixo)</option>
+                    </select>
+                    <input type="number" id="prod-consumo" class="form-input" placeholder="valor manual" min="0" step="0.1" value="0" style="margin-top:8px;" disabled>
+                    <small style="color: var(--gray-500); display:block; margin-top:4px;">No automático, o consumo é calculado pelas saídas. Produto novo começa em 0.</small>
                 </div>
             </div>
             
@@ -3915,7 +4199,8 @@ async function salvarProduto() {
     const estoque = parseInt(document.getElementById('prod-estoque').value) || 0;
     const minimo = parseInt(document.getElementById('prod-minimo').value) || 10;
     const unidade = document.getElementById('prod-unidade').value;
-    const consumo = parseFloat(document.getElementById('prod-consumo').value) || 1;
+    const consumoModo = document.getElementById('prod-consumo-modo').value === 'manual' ? 'manual' : 'automatico';
+    const consumo = consumoModo === 'manual' ? (parseFloat(document.getElementById('prod-consumo').value) || 0) : 0;
     
     if (!nome) {
         showToast('Digite o nome do produto', 'error');
@@ -3940,6 +4225,7 @@ async function salvarProduto() {
                 estoque_minimo: minimo,
                 unidade,
                 consumo_diario: consumo,
+                consumo_modo: consumoModo,
                 fator_embalagem: fator,
                 ativo: true
             })
@@ -3958,6 +4244,9 @@ async function salvarProduto() {
         document.getElementById('prod-codigo').value = '';
         document.getElementById('prod-ean').value = '';
         document.getElementById('prod-fator').value = '1';
+        document.getElementById('prod-consumo-modo').value = 'automatico';
+        document.getElementById('prod-consumo').value = '0';
+        document.getElementById('prod-consumo').disabled = true;
         document.getElementById('prod-icone').value = '📦';
         document.getElementById('prod-categoria').value = '';
         document.getElementById('prod-estoque').value = '0';
@@ -4021,7 +4310,11 @@ function openEditProdutoModal(produtoId) {
             
             <div class="form-group">
                 <label>Consumo Diário</label>
-                <input type="number" id="edit-prod-consumo" class="form-input" value="${produto.consumo_diario || 1}" step="0.1">
+                <select id="edit-prod-consumo-modo" class="form-input" onchange="document.getElementById('edit-prod-consumo').disabled = (this.value !== 'manual')">
+                    <option value="automatico" ${(produto.consumo_modo || 'automatico') !== 'manual' ? 'selected' : ''}>Automático (${(consumoEfetivo(produto)).toFixed(2)}/dia)</option>
+                    <option value="manual" ${produto.consumo_modo === 'manual' ? 'selected' : ''}>Manual (valor fixo)</option>
+                </select>
+                <input type="number" id="edit-prod-consumo" class="form-input" value="${produto.consumo_diario || 0}" step="0.1" min="0" style="margin-top:8px;" ${produto.consumo_modo === 'manual' ? '' : 'disabled'}>
             </div>
         </div>
         
@@ -4065,7 +4358,8 @@ async function atualizarProduto(produtoId) {
     const icone = document.getElementById('edit-prod-icone').value.trim();
     const categoria = document.getElementById('edit-prod-categoria').value;
     const minimo = parseInt(document.getElementById('edit-prod-minimo').value);
-    const consumo = parseFloat(document.getElementById('edit-prod-consumo').value);
+    const consumoModo = document.getElementById('edit-prod-consumo-modo').value === 'manual' ? 'manual' : 'automatico';
+    const consumo = consumoModo === 'manual' ? (parseFloat(document.getElementById('edit-prod-consumo').value) || 0) : (parseFloat(document.getElementById('edit-prod-consumo').value) || 0);
     const unidade = document.getElementById('edit-prod-unidade').value;
     
     if (!nome) {
@@ -4084,6 +4378,7 @@ async function atualizarProduto(produtoId) {
                 categoria_id: parseInt(categoria),
                 estoque_minimo: minimo,
                 consumo_diario: consumo,
+                consumo_modo: consumoModo,
                 unidade,
                 fator_embalagem: fator
             })
