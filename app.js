@@ -3564,6 +3564,8 @@ async function aplicarManualEmMassa() {
         if (error) throw error;
         showToast(`${ids.length} produto(s) definido(s) como manual`, 'success');
         await loadProdutos();
+        consumoSelecao.clear();
+        atualizarContadorConsumo();
         const lista = document.getElementById('consumo-lista');
         if (lista) lista.innerHTML = renderConsumoLista();
     } catch (error) {
@@ -3583,6 +3585,8 @@ async function voltarAutomaticoSelecionados() {
         showToast(`${ids.length} produto(s) voltaram para automático`, 'success');
         await loadProdutos();
         await calcularConsumos();
+        consumoSelecao.clear();
+        atualizarContadorConsumo();
         const lista = document.getElementById('consumo-lista');
         if (lista) lista.innerHTML = renderConsumoLista();
     } catch (error) {
