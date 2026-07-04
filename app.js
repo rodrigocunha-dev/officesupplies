@@ -1550,11 +1550,13 @@ function montarItensCompra() {
     const margemFator = 1 + comprasMargem / 100;
     const mapa = {};
 
-    // 1) Reposição automática (estoque baixo)
+    // 1) Reposição guiada por dias de cobertura (todos os produtos com consumo > 0).
+    //    necessário = consumo × dias × (1 + margem%), arredondado pra cima.
+    //    comprar = necessário − estoque (só entra quem tem falta).
     cache.produtos.forEach(p => {
-        if (p.estoque <= p.estoque_minimo * margemFator) {
-            const consumoDiario = consumoEfetivo(p);
-            const necessario = Math.ceil(consumoDiario * comprasDias);
+        const consumoDiario = consumoEfetivo(p);
+        if (consumoDiario > 0) {
+            const necessario = Math.ceil(consumoDiario * comprasDias * margemFator);
             const comprar = Math.max(0, necessario - p.estoque);
             if (comprar > 0) {
                 const key = 'prod-' + p.id;
@@ -1580,7 +1582,7 @@ function montarItensCompra() {
                 const p = cache.produtos.find(x => x.id === a.produto_id);
                 if (p) {
                     const consumoDiario = consumoEfetivo(p);
-                    const necessario = Math.ceil(consumoDiario * comprasDias);
+                    const necessario = Math.ceil(consumoDiario * comprasDias * margemFator);
                     mapa[key] = {
                         key, produtoId: p.id, nome: p.nome, icone: p.icone,
                         categoria: p.categorias?.nome || null, estoque: p.estoque,
@@ -3395,39 +3397,52 @@ let consumoSelecao = new Set();
 
 const DIAS_SEMANA = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
+function produtosConsumoFiltrados() {
+    let produtos = [...cache.produtos];
+    if (consumoFiltroModo === 'automatico') produtos = produtos.filter(p => (p.consumo_modo || 'automatico') !== 'manual');
+    if (consumoFiltroModo === 'manual') produtos = produtos.filter(p => p.consumo_modo === 'manual');
+    produtos.sort((a, b) => a.nome.localeCompare(b.nome));
+    return produtos;
+}
+
+function renderConsumoLinhaProduto(p) {
+    const manual = p.consumo_modo === 'manual';
+    const efetivo = consumoEfetivo(p);
+    const sel = consumoSelecao.has(p.id);
+    return `
+        <div class="list-item" style="cursor:default;">
+            <input type="checkbox" class="consumo-check" data-id="${p.id}" ${sel ? 'checked' : ''} onchange="toggleConsumoSel(${p.id})" style="width:18px; height:18px; margin-right:8px;">
+            <div class="list-item-content">
+                <div class="list-item-title">${p.icone || '📦'} ${p.nome}</div>
+                <div class="list-item-subtitle">
+                    Consumo: ${efetivo.toFixed(2)}/dia
+                    <span class="badge ${manual ? 'badge-warning' : 'badge-info'}" style="margin-left:6px;">${manual ? '✏️ manual' : 'automático'}</span>
+                </div>
+            </div>
+            <div class="list-item-right" style="display:flex; gap:6px; align-items:center;">
+                <input type="number" id="consumo-ind-${p.id}" value="${manual ? (p.consumo_diario || 0) : efetivo.toFixed(2)}" min="0" step="0.1" style="width:70px; text-align:center; padding:6px; border:1px solid var(--gray-300,#ccc); border-radius:8px;">
+                <button class="btn btn-secondary btn-sm" style="padding:6px 8px;" title="Definir manual" onclick="salvarConsumoIndividual(${p.id})">✓</button>
+            </div>
+        </div>`;
+}
+
+function renderConsumoLista() {
+    const produtos = produtosConsumoFiltrados();
+    if (produtos.length === 0) return '<div class="empty-state"><p>Nenhum produto.</p></div>';
+    return produtos.map(renderConsumoLinhaProduto).join('');
+}
+
+function atualizarContadorConsumo() {
+    const el = document.getElementById('consumo-contador');
+    if (el) el.textContent = `${consumoSelecao.size} selecionado(s)`;
+}
+
 function renderConfiguracoes() {
     if (currentProfile?.role !== 'admin') {
         return `<div class="empty-state"><div class="icon">🔒</div><h3>Acesso Restrito</h3><p>Apenas administradores.</p></div>`;
     }
 
     const cfg = cache.config || { periodo: 30, diasSemana: [0, 1, 2, 3, 4, 5, 6] };
-
-    // Lista de produtos filtrada por modo
-    let produtos = [...cache.produtos];
-    if (consumoFiltroModo === 'automatico') produtos = produtos.filter(p => (p.consumo_modo || 'automatico') !== 'manual');
-    if (consumoFiltroModo === 'manual') produtos = produtos.filter(p => p.consumo_modo === 'manual');
-    produtos.sort((a, b) => a.nome.localeCompare(b.nome));
-
-    const linhaProduto = (p) => {
-        const manual = p.consumo_modo === 'manual';
-        const efetivo = consumoEfetivo(p);
-        const sel = consumoSelecao.has(p.id);
-        return `
-            <div class="list-item" style="cursor:default;">
-                <input type="checkbox" ${sel ? 'checked' : ''} onchange="toggleConsumoSel(${p.id})" style="width:18px; height:18px; margin-right:8px;">
-                <div class="list-item-content">
-                    <div class="list-item-title">${p.icone || '📦'} ${p.nome}</div>
-                    <div class="list-item-subtitle">
-                        Consumo: ${efetivo.toFixed(2)}/dia
-                        <span class="badge ${manual ? 'badge-warning' : 'badge-info'}" style="margin-left:6px;">${manual ? '✏️ manual' : 'automático'}</span>
-                    </div>
-                </div>
-                <div class="list-item-right" style="display:flex; gap:6px; align-items:center;">
-                    <input type="number" id="consumo-ind-${p.id}" value="${manual ? (p.consumo_diario || 0) : efetivo.toFixed(2)}" min="0" step="0.1" style="width:70px; text-align:center; padding:6px; border:1px solid var(--gray-300,#ccc); border-radius:8px;">
-                    <button class="btn btn-secondary btn-sm" style="padding:6px 8px;" title="Definir manual" onclick="salvarConsumoIndividual(${p.id})">✓</button>
-                </div>
-            </div>`;
-    };
 
     return `
         <div class="page-header">
@@ -3475,14 +3490,14 @@ function renderConfiguracoes() {
 
             <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; padding-bottom:12px; border-bottom:1px solid var(--gray-200,#eee);">
                 <button class="btn btn-secondary btn-sm" onclick="toggleConsumoSelTodos()">Selecionar todos</button>
-                <span style="color:var(--gray-500); font-size:13px;">${consumoSelecao.size} selecionado(s)</span>
+                <span id="consumo-contador" style="color:var(--gray-500); font-size:13px;">${consumoSelecao.size} selecionado(s)</span>
                 <div style="flex:1;"></div>
                 <input type="number" id="consumo-massa-valor" placeholder="valor" min="0" step="0.1" style="width:80px; text-align:center; padding:6px; border:1px solid var(--gray-300,#ccc); border-radius:8px;">
                 <button class="btn btn-primary btn-sm" onclick="aplicarManualEmMassa()">Aplicar manual</button>
                 <button class="btn btn-secondary btn-sm" onclick="voltarAutomaticoSelecionados()">Voltar p/ automático</button>
             </div>
 
-            ${produtos.length === 0 ? '<div class="empty-state"><p>Nenhum produto.</p></div>' : produtos.map(linhaProduto).join('')}
+            <div id="consumo-lista">${renderConsumoLista()}</div>
         </div>
     `;
 }
@@ -3514,19 +3529,27 @@ async function salvarConfig() {
     }
 }
 
-function setFiltroConsumoModo(v) { consumoFiltroModo = v; renderPage(); }
+function setFiltroConsumoModo(v) {
+    consumoFiltroModo = v;
+    const lista = document.getElementById('consumo-lista');
+    if (lista) lista.innerHTML = renderConsumoLista();
+}
+
 function toggleConsumoSel(id) {
     if (consumoSelecao.has(id)) consumoSelecao.delete(id); else consumoSelecao.add(id);
-    renderPage();
+    atualizarContadorConsumo();
 }
+
 function toggleConsumoSelTodos() {
-    let produtos = [...cache.produtos];
-    if (consumoFiltroModo === 'automatico') produtos = produtos.filter(p => (p.consumo_modo || 'automatico') !== 'manual');
-    if (consumoFiltroModo === 'manual') produtos = produtos.filter(p => p.consumo_modo === 'manual');
-    const todosSelecionados = produtos.every(p => consumoSelecao.has(p.id));
+    const produtos = produtosConsumoFiltrados();
+    const todosSelecionados = produtos.length > 0 && produtos.every(p => consumoSelecao.has(p.id));
     if (todosSelecionados) produtos.forEach(p => consumoSelecao.delete(p.id));
     else produtos.forEach(p => consumoSelecao.add(p.id));
-    renderPage();
+    // Atualiza os checkboxes visíveis sem recarregar a tela
+    document.querySelectorAll('.consumo-check').forEach(chk => {
+        chk.checked = consumoSelecao.has(parseInt(chk.dataset.id));
+    });
+    atualizarContadorConsumo();
 }
 
 async function aplicarManualEmMassa() {
@@ -3541,7 +3564,8 @@ async function aplicarManualEmMassa() {
         if (error) throw error;
         showToast(`${ids.length} produto(s) definido(s) como manual`, 'success');
         await loadProdutos();
-        renderPage();
+        const lista = document.getElementById('consumo-lista');
+        if (lista) lista.innerHTML = renderConsumoLista();
     } catch (error) {
         console.error('Erro ao aplicar manual em massa:', error);
         showToast('Erro: ' + (error.message || ''), 'error');
@@ -3559,7 +3583,8 @@ async function voltarAutomaticoSelecionados() {
         showToast(`${ids.length} produto(s) voltaram para automático`, 'success');
         await loadProdutos();
         await calcularConsumos();
-        renderPage();
+        const lista = document.getElementById('consumo-lista');
+        if (lista) lista.innerHTML = renderConsumoLista();
     } catch (error) {
         console.error('Erro ao voltar automático:', error);
         showToast('Erro: ' + (error.message || ''), 'error');
@@ -3576,7 +3601,8 @@ async function salvarConsumoIndividual(id) {
         if (error) throw error;
         showToast('Consumo manual definido', 'success');
         await loadProdutos();
-        renderPage();
+        const lista = document.getElementById('consumo-lista');
+        if (lista) lista.innerHTML = renderConsumoLista();
     } catch (error) {
         console.error('Erro ao salvar consumo individual:', error);
         showToast('Erro: ' + (error.message || ''), 'error');
