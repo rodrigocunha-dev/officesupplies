@@ -1187,6 +1187,25 @@ function filterHistorico(tipo, btn) {
 // RENDERIZAÇÃO - SUGESTÕES
 // ============================================
 let sugOrdem = null; // null = usa o padrão do perfil
+let sugView = null;  // 'lista' | 'blocos' (null = restaura da preferência)
+
+function diasParado(dateStr) {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    return Math.max(0, Math.floor(diff / 86400000));
+}
+
+function getSugView() {
+    if (!sugView) {
+        try { sugView = sessionStorage.getItem('sugView') || 'lista'; } catch (e) { sugView = 'lista'; }
+    }
+    return sugView;
+}
+
+function setSugView(v) {
+    sugView = v;
+    try { sessionStorage.setItem('sugView', v); } catch (e) {}
+    renderPage();
+}
 
 function ordenarSugestoes(lista, isAdmin) {
     const ordem = sugOrdem || (isAdmin ? 'mais_votadas' : 'nao_votados');
@@ -1207,12 +1226,16 @@ function ordenarSugestoes(lista, isAdmin) {
                 return (ativos ? vb.apoios / ativos : 0) - (ativos ? va.apoios / ativos : 0);
             case 'categoria':
                 return (a.categorias?.nome || 'zzz').localeCompare(b.categorias?.nome || 'zzz') || a.nome.localeCompare(b.nome);
-            case 'alfabetica':
+            case 'az':
                 return a.nome.localeCompare(b.nome);
+            case 'za':
+                return b.nome.localeCompare(a.nome);
             case 'nao_votados':
                 // não votados primeiro; depois por apoios
                 return (va.meuVoto ? 1 : 0) - (vb.meuVoto ? 1 : 0) || vb.apoios - va.apoios;
-            case 'data':
+            case 'antigos':
+                return new Date(a.created_at) - new Date(b.created_at);
+            case 'recentes':
             default:
                 return new Date(b.created_at) - new Date(a.created_at);
         }
@@ -1222,9 +1245,14 @@ function ordenarSugestoes(lista, isAdmin) {
 
 function renderSugestoes() {
     const isAdmin = currentProfile?.role === 'admin';
+    const view = getSugView();
     const pendentes = ordenarSugestoes(cache.sugestoes.filter(s => s.status === 'pendente'), isAdmin);
     const outras = cache.sugestoes.filter(s => s.status !== 'pendente');
     const ordemAtual = sugOrdem || (isAdmin ? 'mais_votadas' : 'nao_votados');
+
+    const wrap = (itens) => view === 'blocos'
+        ? `<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:12px;">${itens}</div>`
+        : itens;
 
     return `
         <div class="page-header">
@@ -1233,8 +1261,11 @@ function renderSugestoes() {
                     <div class="page-title">Sugestões</div>
                     <div class="page-subtitle">${pendentes.length} pendentes</div>
                 </div>
-                <div class="page-actions">
-                    <button class="btn btn-primary btn-sm" onclick="openSugestaoModal()">💡 Nova Sugestão</button>
+                <div class="page-actions" style="display:flex; gap:8px;">
+                    <button class="btn btn-secondary btn-sm" onclick="setSugView('${view === 'lista' ? 'blocos' : 'lista'}')" title="Alternar visualização">
+                        ${view === 'lista' ? '▦ Blocos' : '☰ Lista'}
+                    </button>
+                    <button class="btn btn-primary btn-sm" onclick="openSugestaoModal()">💡 Nova</button>
                 </div>
             </div>
         </div>
@@ -1251,23 +1282,25 @@ function renderSugestoes() {
                         <option value="aprov_time" ${ordemAtual === 'aprov_time' ? 'selected' : ''}>Maior aprovação (time)</option>
                         ` : ''}
                         <option value="nao_votados" ${ordemAtual === 'nao_votados' ? 'selected' : ''}>Não votados primeiro</option>
-                        <option value="data" ${ordemAtual === 'data' ? 'selected' : ''}>Data</option>
+                        <option value="recentes" ${ordemAtual === 'recentes' ? 'selected' : ''}>Mais recentes</option>
+                        <option value="antigos" ${ordemAtual === 'antigos' ? 'selected' : ''}>Mais antigos</option>
                         <option value="categoria" ${ordemAtual === 'categoria' ? 'selected' : ''}>Categoria</option>
-                        <option value="alfabetica" ${ordemAtual === 'alfabetica' ? 'selected' : ''}>Ordem alfabética</option>
+                        <option value="az" ${ordemAtual === 'az' ? 'selected' : ''}>Nome (A–Z)</option>
+                        <option value="za" ${ordemAtual === 'za' ? 'selected' : ''}>Nome (Z–A)</option>
                     </select>
                 </div>
             </div>
 
             <div class="card">
                 <div class="card-title">📬 Pendentes</div>
-                ${pendentes.map(s => renderSugestaoItem(s, true)).join('')}
+                ${wrap(pendentes.map(s => renderSugestaoItem(s, true)).join(''))}
             </div>
         ` : ''}
 
         ${outras.length > 0 ? `
             <div class="card">
                 <div class="card-title">📋 Histórico</div>
-                ${outras.map(s => renderSugestaoItem(s, false)).join('')}
+                ${wrap(outras.map(s => renderSugestaoItem(s, false)).join(''))}
             </div>
         ` : ''}
 
@@ -1284,68 +1317,105 @@ function renderSugestoes() {
 
 function setSugOrdem(v) { sugOrdem = v; renderPage(); }
 
+// Peças reutilizáveis do item de sugestão
+function sugMeta(s, isAdmin) {
+    const dias = diasParado(s.created_at);
+    const cfg = cache.config || {};
+    const limite = cfg.sugestaoAlertaDias != null ? cfg.sugestaoAlertaDias : 15;
+    const parado = isAdmin && s.status === 'pendente' && dias >= limite;
+    const cor = parado ? 'var(--danger)' : 'var(--gray-500)';
+    const peso = parado ? '600' : '400';
+    const dataFmt = new Date(s.created_at).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+    return `<div style="font-size:12px; color:var(--gray-500);">
+        ${s.categorias?.nome ? `<span>${s.categorias.icone || '📦'} ${s.categorias.nome}</span> • ` : ''}${s.profiles?.nome || 'Usuário'}<br>
+        ${dataFmt} • <span style="color:${cor}; font-weight:${peso};">há ${dias} ${dias === 1 ? 'dia' : 'dias'}${parado ? ' ⚠️' : ''}</span>
+    </div>`;
+}
+
+function sugVotoBotoes(s, isAdmin) {
+    const vt = votosDaSugestao(s.id);
+    return `
+        <button class="btn btn-sm" onclick="votarSugestao(${s.id}, 'apoiar')"
+            style="padding:4px 8px; font-size:12px; background:${vt.meuVoto === 'apoiar' ? 'var(--success)' : 'transparent'}; color:${vt.meuVoto === 'apoiar' ? '#fff' : 'var(--success)'}; border:1px solid var(--success);">
+            👍 ${vt.apoios}
+        </button>
+        <button class="btn btn-sm" onclick="votarSugestao(${s.id}, 'rejeitar')"
+            style="padding:4px 8px; font-size:12px; background:${vt.meuVoto === 'rejeitar' ? 'var(--danger)' : 'transparent'}; color:${vt.meuVoto === 'rejeitar' ? '#fff' : 'var(--danger)'}; border:1px solid var(--danger);">
+            👎${isAdmin ? ' ' + vt.rejeicoes : ''}
+        </button>`;
+}
+
+function sugDecisao(s) {
+    return `
+        <button class="btn btn-success btn-sm" onclick="respondSugestao(${s.id}, 'aprovada')" style="padding:4px 10px; font-size:12px;">Aprovar</button>
+        <button class="btn btn-danger btn-sm" onclick="respondSugestao(${s.id}, 'recusada')" style="padding:4px 10px; font-size:12px;">Recusar</button>`;
+}
+
+function sugPainelMetricas(s) {
+    const vt = votosDaSugestao(s.id);
+    const ativos = cache.totalAtivos || 0;
+    const pctApoio = vt.total ? Math.round((vt.apoios / vt.total) * 100) : 0;
+    const pctRej = vt.total ? Math.round((vt.rejeicoes / vt.total) * 100) : 0;
+    const pctPartic = ativos ? Math.round((vt.total / ativos) * 100) : 0;
+    const pctTime = ativos ? Math.round((vt.apoios / ativos) * 100) : 0;
+    return `
+        <div style="background:var(--gray-100,#f5f5f5); border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.7;">
+            <div style="font-size:15px;">
+                <span style="color:var(--success); font-weight:700;">👍 ${vt.apoios} (${pctApoio}%)</span>
+                &nbsp;·&nbsp;
+                <span style="color:var(--danger); font-weight:700;">👎 ${vt.rejeicoes} (${pctRej}%)</span>
+            </div>
+            <div style="color:var(--gray-600);">Total: ${vt.total} votos (${pctPartic}% do time)</div>
+            <div style="color:var(--gray-600);">Aprovação — votantes: <strong>${pctApoio}%</strong> · time: <strong>${pctTime}%</strong></div>
+        </div>`;
+}
+
 function renderSugestaoItem(s, pendente) {
     const isAdmin = currentProfile?.role === 'admin';
+    const view = getSugView();
     const statusBadge = {
         pendente: '<span class="badge badge-warning">Pendente</span>',
         aprovada: '<span class="badge badge-success">Aprovada</span>',
         recusada: '<span class="badge badge-danger">Recusada</span>',
         comprada: '<span class="badge badge-success">✓ Comprada</span>'
     };
-
     const vt = votosDaSugestao(s.id);
-    const ativos = cache.totalAtivos || 0;
-    const pctVotantesApoio = vt.total ? Math.round((vt.apoios / vt.total) * 100) : 0;
-    const pctVotantesRej = vt.total ? Math.round((vt.rejeicoes / vt.total) * 100) : 0;
-    const pctPartic = ativos ? Math.round((vt.total / ativos) * 100) : 0;
-    const pctAprovTime = ativos ? Math.round((vt.apoios / ativos) * 100) : 0;
 
-    // Botões de voto (todos votam nas pendentes)
-    const votoBtns = pendente ? `
-        <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
-            <button class="btn btn-sm" onclick="votarSugestao(${s.id}, 'apoiar')"
-                style="padding:6px 10px; background:${vt.meuVoto === 'apoiar' ? 'var(--success)' : 'var(--gray-100,#eee)'}; color:${vt.meuVoto === 'apoiar' ? '#fff' : 'var(--success)'}; border:1px solid var(--success);">
-                👍 ${vt.apoios}
-            </button>
-            <button class="btn btn-sm" onclick="votarSugestao(${s.id}, 'rejeitar')"
-                style="padding:6px 10px; background:${vt.meuVoto === 'rejeitar' ? 'var(--danger)' : 'var(--gray-100,#eee)'}; color:${vt.meuVoto === 'rejeitar' ? '#fff' : 'var(--danger)'}; border:1px solid var(--danger);">
-                👎 ${isAdmin ? vt.rejeicoes : ''}
-            </button>
-        </div>` : '';
+    const titulo = `<div style="font-weight:600;">${s.nome} ${!pendente ? statusBadge[s.status] : ''}</div>`;
+    const justi = s.justificativa ? `<div style="font-size:12px; color:var(--gray-600); margin-top:2px;"><em>"${s.justificativa}"</em></div>` : '';
+    const votos = pendente ? sugVotoBotoes(s, isAdmin) : `<span style="font-size:13px; color:var(--success);">👍 ${vt.apoios}</span>`;
+    const painel = (pendente && isAdmin) ? sugPainelMetricas(s) : '';
+    const decisao = (pendente && isAdmin) ? sugDecisao(s) : '';
 
-    // Painel de métricas (só admin, só pendentes)
-    const painel = (pendente && isAdmin) ? `
-        <div style="margin-top:8px; font-size:12px; color:var(--gray-600); line-height:1.6;">
-            <span style="color:var(--success); font-weight:600;">👍 ${vt.apoios} (${pctVotantesApoio}%)</span>
-            &nbsp;·&nbsp;
-            <span style="color:var(--danger); font-weight:600;">👎 ${vt.rejeicoes} (${pctVotantesRej}%)</span><br>
-            Total: ${vt.total} votos (${pctPartic}% de participação)<br>
-            Aprovação dos votantes: ${pctVotantesApoio}% · Aprovação do time: ${pctAprovTime}%
-        </div>` : '';
+    if (view === 'blocos') {
+        return `
+            <div class="card" style="margin:0; padding:14px;">
+                ${titulo}
+                ${sugMeta(s, isAdmin)}
+                ${justi}
+                ${painel ? `<div style="margin-top:8px;">${painel}</div>` : ''}
+                <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                    ${votos}
+                    ${decisao ? `<div style="flex-basis:100%; height:0;"></div>${decisao}` : ''}
+                </div>
+            </div>`;
+    }
 
-    // Decisão do admin
-    const decisao = (pendente && isAdmin) ? `
-        <div style="margin-top: 8px; display: flex; gap: 8px;">
-            <button class="btn btn-success btn-sm" onclick="respondSugestao(${s.id}, 'aprovada')" style="padding: 6px 12px;">Aprovar</button>
-            <button class="btn btn-danger btn-sm" onclick="respondSugestao(${s.id}, 'recusada')" style="padding: 6px 12px;">Recusar</button>
-        </div>` : '';
-
+    // Lista
     return `
-        <div class="list-item" style="cursor: default; align-items:flex-start;">
+        <div class="list-item" style="cursor:default; align-items:flex-start; gap:10px;">
             <div class="list-item-icon">${s.categorias?.icone || '📦'}</div>
             <div class="list-item-content">
-                <div class="list-item-title">${s.nome} ${!pendente ? statusBadge[s.status] : ''}</div>
-                <div class="list-item-subtitle">
-                    ${s.profiles?.nome || 'Usuário'} • ${formatDate(s.created_at)}
-                    ${s.justificativa ? `<br><em>"${s.justificativa}"</em>` : ''}
-                    ${!pendente ? `<br><span style="color:var(--success);">👍 ${vt.apoios}</span>` : ''}
+                ${titulo}
+                ${sugMeta(s, isAdmin)}
+                ${justi}
+                <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                    ${votos}
+                    ${decisao}
                 </div>
-                ${votoBtns}
-                ${painel}
-                ${decisao}
             </div>
-        </div>
-    `;
+            ${painel ? `<div style="width:190px; flex-shrink:0;">${painel}</div>` : ''}
+        </div>`;
 }
 
 async function respondSugestao(id, status) {
@@ -1617,7 +1687,8 @@ async function loadConfig() {
         if (error) throw error;
         cache.config = {
             periodo: data.consumo_periodo_dias || 30,
-            diasSemana: (data.consumo_dias_semana || '0,1,2,3,4,5,6').split(',').map(n => parseInt(n)).filter(n => !isNaN(n))
+            diasSemana: (data.consumo_dias_semana || '0,1,2,3,4,5,6').split(',').map(n => parseInt(n)).filter(n => !isNaN(n)),
+            sugestaoAlertaDias: data.sugestao_alerta_dias != null ? data.sugestao_alerta_dias : 15
         };
     } catch (e) {
         console.warn('Erro ao carregar configurações:', e);
@@ -3617,6 +3688,16 @@ function renderConfiguracoes() {
         </div>
 
         <div class="card">
+            <div class="card-title">💡 Sugestões</div>
+            <div class="form-group">
+                <label>Alertar sugestões paradas há mais de (dias)</label>
+                <input type="number" id="cfg-sug-alerta" class="form-input" value="${cfg.sugestaoAlertaDias != null ? cfg.sugestaoAlertaDias : 15}" min="1">
+                <small style="color: var(--gray-500);">Sugestões pendentes com mais dias que isso ganham destaque de "parada" (só o admin vê).</small>
+            </div>
+            <button class="btn btn-primary" onclick="salvarConfig()">Salvar</button>
+        </div>
+
+        <div class="card">
             <div class="card-title">📦 Consumo dos produtos</div>
 
             <div class="config-grid" style="margin-bottom:12px;">
@@ -3656,10 +3737,12 @@ async function salvarConfig() {
     const dias = [];
     for (let i = 0; i < 7; i++) { if (document.getElementById('cfg-dia-' + i)?.checked) dias.push(i); }
     if (dias.length === 0) { showToast('Selecione ao menos um dia', 'error'); return; }
+    const sugAlerta = Math.max(1, parseInt(document.getElementById('cfg-sug-alerta')?.value) || 15);
     try {
         const { error } = await supabaseClient.from('configuracoes').update({
             consumo_periodo_dias: periodo,
             consumo_dias_semana: dias.join(','),
+            sugestao_alerta_dias: sugAlerta,
             updated_at: new Date().toISOString()
         }).eq('id', 1);
         if (error) throw error;
