@@ -1250,8 +1250,9 @@ function renderSugestoes() {
     const outras = cache.sugestoes.filter(s => s.status !== 'pendente');
     const ordemAtual = sugOrdem || (isAdmin ? 'mais_votadas' : 'nao_votados');
 
+    const minCard = isAdmin ? '240px' : '160px';
     const wrap = (itens) => view === 'blocos'
-        ? `<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:12px;">${itens}</div>`
+        ? `<div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(${minCard}, 1fr)); gap:10px;">${itens}</div>`
         : itens;
 
     return `
@@ -1336,21 +1337,22 @@ function sugVotoBotoes(s, isAdmin) {
     const vt = votosDaSugestao(s.id);
     return `
         <button class="btn btn-sm" onclick="votarSugestao(${s.id}, 'apoiar')"
-            style="padding:4px 8px; font-size:12px; background:${vt.meuVoto === 'apoiar' ? 'var(--success)' : 'transparent'}; color:${vt.meuVoto === 'apoiar' ? '#fff' : 'var(--success)'}; border:1px solid var(--success);">
+            style="height:32px; padding:0 8px; font-size:12px; background:${vt.meuVoto === 'apoiar' ? 'var(--success)' : 'transparent'}; color:${vt.meuVoto === 'apoiar' ? '#fff' : 'var(--success)'}; border:1px solid var(--success);">
             👍 ${vt.apoios}
         </button>
         <button class="btn btn-sm" onclick="votarSugestao(${s.id}, 'rejeitar')"
-            style="padding:4px 8px; font-size:12px; background:${vt.meuVoto === 'rejeitar' ? 'var(--danger)' : 'transparent'}; color:${vt.meuVoto === 'rejeitar' ? '#fff' : 'var(--danger)'}; border:1px solid var(--danger);">
+            style="height:32px; padding:0 8px; font-size:12px; background:${vt.meuVoto === 'rejeitar' ? 'var(--danger)' : 'transparent'}; color:${vt.meuVoto === 'rejeitar' ? '#fff' : 'var(--danger)'}; border:1px solid var(--danger);">
             👎${isAdmin ? ' ' + vt.rejeicoes : ''}
         </button>`;
 }
 
 function sugDecisao(s) {
     return `
-        <button class="btn btn-success btn-sm" onclick="respondSugestao(${s.id}, 'aprovada')" style="padding:4px 10px; font-size:12px;">Aprovar</button>
-        <button class="btn btn-danger btn-sm" onclick="respondSugestao(${s.id}, 'recusada')" style="padding:4px 10px; font-size:12px;">Recusar</button>`;
+        <button class="btn btn-success btn-sm" onclick="respondSugestao(${s.id}, 'aprovada')" title="Aprovar" style="width:32px; height:32px; padding:0; font-size:14px;">✓</button>
+        <button class="btn btn-danger btn-sm" onclick="respondSugestao(${s.id}, 'recusada')" title="Recusar" style="width:32px; height:32px; padding:0; font-size:14px;">✗</button>`;
 }
 
+// Métricas em quadro vertical (blocos)
 function sugPainelMetricas(s) {
     const vt = votosDaSugestao(s.id);
     const ativos = cache.totalAtivos || 0;
@@ -1359,14 +1361,31 @@ function sugPainelMetricas(s) {
     const pctPartic = ativos ? Math.round((vt.total / ativos) * 100) : 0;
     const pctTime = ativos ? Math.round((vt.apoios / ativos) * 100) : 0;
     return `
-        <div style="background:var(--gray-100,#f5f5f5); border-radius:10px; padding:10px 12px; font-size:13px; line-height:1.7;">
-            <div style="font-size:15px;">
+        <div style="background:var(--gray-100,#f5f5f5); border-radius:10px; padding:8px 10px; font-size:12px; line-height:1.6;">
+            <div style="font-size:14px;">
                 <span style="color:var(--success); font-weight:700;">👍 ${vt.apoios} (${pctApoio}%)</span>
                 &nbsp;·&nbsp;
                 <span style="color:var(--danger); font-weight:700;">👎 ${vt.rejeicoes} (${pctRej}%)</span>
             </div>
-            <div style="color:var(--gray-600);">Total: ${vt.total} votos (${pctPartic}% do time)</div>
-            <div style="color:var(--gray-600);">Aprovação — votantes: <strong>${pctApoio}%</strong> · time: <strong>${pctTime}%</strong></div>
+            <div style="color:var(--gray-600);">${vt.total} votos · part. ${pctPartic}%</div>
+            <div style="color:var(--gray-600);">aprov: votantes ${pctApoio}% · time ${pctTime}%</div>
+        </div>`;
+}
+
+// Métricas em faixa horizontal compacta (lista)
+function sugMetricasFaixa(s) {
+    const vt = votosDaSugestao(s.id);
+    const ativos = cache.totalAtivos || 0;
+    const pctApoio = vt.total ? Math.round((vt.apoios / vt.total) * 100) : 0;
+    const pctRej = vt.total ? Math.round((vt.rejeicoes / vt.total) * 100) : 0;
+    const pctPartic = ativos ? Math.round((vt.total / ativos) * 100) : 0;
+    const pctTime = ativos ? Math.round((vt.apoios / ativos) * 100) : 0;
+    return `
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:var(--gray-100,#f5f5f5); border-radius:8px; padding:5px 10px; font-size:12px;">
+            <span style="color:var(--success); font-weight:700;">👍 ${vt.apoios} (${pctApoio}%)</span>
+            <span style="color:var(--danger); font-weight:700;">👎 ${vt.rejeicoes} (${pctRej}%)</span>
+            <span style="color:var(--gray-600);">${vt.total}v · part. ${pctPartic}%</span>
+            <span style="color:var(--gray-600);">aprov. time ${pctTime}%</span>
         </div>`;
 }
 
@@ -1381,40 +1400,44 @@ function renderSugestaoItem(s, pendente) {
     };
     const vt = votosDaSugestao(s.id);
 
-    const titulo = `<div style="font-weight:600;">${s.nome} ${!pendente ? statusBadge[s.status] : ''}</div>`;
+    const titulo = `<div style="font-weight:600; font-size:14px;">${s.nome} ${!pendente ? statusBadge[s.status] : ''}</div>`;
     const justi = s.justificativa ? `<div style="font-size:12px; color:var(--gray-600); margin-top:2px;"><em>"${s.justificativa}"</em></div>` : '';
     const votos = pendente ? sugVotoBotoes(s, isAdmin) : `<span style="font-size:13px; color:var(--success);">👍 ${vt.apoios}</span>`;
-    const painel = (pendente && isAdmin) ? sugPainelMetricas(s) : '';
-    const decisao = (pendente && isAdmin) ? sugDecisao(s) : '';
 
     if (view === 'blocos') {
+        const painel = (pendente && isAdmin) ? `<div style="margin-top:8px;">${sugPainelMetricas(s)}</div>` : '';
         return `
-            <div class="card" style="margin:0; padding:14px;">
+            <div class="card" style="margin:0; padding:${isAdmin ? '14px' : '10px'};">
                 ${titulo}
                 ${sugMeta(s, isAdmin)}
                 ${justi}
-                ${painel ? `<div style="margin-top:8px;">${painel}</div>` : ''}
-                <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                ${painel}
+                <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
                     ${votos}
-                    ${decisao ? `<div style="flex-basis:100%; height:0;"></div>${decisao}` : ''}
+                    ${(pendente && isAdmin) ? sugDecisao(s) : ''}
                 </div>
             </div>`;
     }
 
-    // Lista
+    // Lista (adaptável: quebra para baixo em telas estreitas)
+    const acoes = pendente ? `
+        <div style="display:flex; gap:6px; align-items:center; flex-shrink:0;">
+            ${votos}
+            ${isAdmin ? sugDecisao(s) : ''}
+        </div>` : `<div style="flex-shrink:0;">${votos}</div>`;
+
+    const faixa = (pendente && isAdmin) ? `<div style="flex:1; min-width:200px;">${sugMetricasFaixa(s)}</div>` : '';
+
     return `
-        <div class="list-item" style="cursor:default; align-items:flex-start; gap:10px;">
+        <div class="list-item" style="cursor:default; gap:8px; flex-wrap:wrap; align-items:center;">
             <div class="list-item-icon">${s.categorias?.icone || '📦'}</div>
-            <div class="list-item-content">
+            <div style="flex:1; min-width:150px;">
                 ${titulo}
                 ${sugMeta(s, isAdmin)}
                 ${justi}
-                <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
-                    ${votos}
-                    ${decisao}
-                </div>
             </div>
-            ${painel ? `<div style="width:190px; flex-shrink:0;">${painel}</div>` : ''}
+            ${faixa}
+            ${acoes}
         </div>`;
 }
 
