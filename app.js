@@ -520,8 +520,48 @@ async function loadSugestoes() {
         
         if (error) throw error;
         cache.sugestoes = data || [];
+
+        // Votos das sugestões
+        const { data: votos } = await supabaseClient.from('votos_sugestao').select('*');
+        cache.votosSugestao = votos || [];
+
+        // Total de usuários ativos (base do % do time)
+        const { count } = await supabaseClient
+            .from('profiles').select('id', { count: 'exact', head: true }).eq('ativo', true);
+        cache.totalAtivos = count || 0;
     } catch (error) {
         console.error('Erro ao carregar sugestões:', error);
+    }
+}
+
+function votosDaSugestao(sugId) {
+    const votos = (cache.votosSugestao || []).filter(v => v.sugestao_id === sugId);
+    const apoios = votos.filter(v => v.tipo === 'apoiar').length;
+    const rejeicoes = votos.filter(v => v.tipo === 'rejeitar').length;
+    const meu = votos.find(v => v.user_id === currentUser?.id);
+    return { apoios, rejeicoes, total: apoios + rejeicoes, meuVoto: meu ? meu.tipo : null };
+}
+
+async function votarSugestao(sugId, tipo) {
+    const userId = await getCurrentUserId();
+    if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
+    try {
+        const atual = (cache.votosSugestao || []).find(v => v.sugestao_id === sugId && v.user_id === userId);
+        if (atual && atual.tipo === tipo) {
+            // Clicou de novo no mesmo voto → remove
+            const { error } = await supabaseClient.from('votos_sugestao')
+                .delete().eq('sugestao_id', sugId).eq('user_id', userId);
+            if (error) throw error;
+        } else {
+            const { error } = await supabaseClient.from('votos_sugestao')
+                .upsert({ sugestao_id: sugId, user_id: userId, tipo }, { onConflict: 'sugestao_id,user_id' });
+            if (error) throw error;
+        }
+        await loadSugestoes();
+        renderPage();
+    } catch (error) {
+        console.error('Erro ao votar:', error);
+        showToast('Erro ao votar: ' + (error.message || 'verifique o console'), 'error');
     }
 }
 
@@ -1146,11 +1186,46 @@ function filterHistorico(tipo, btn) {
 // ============================================
 // RENDERIZAÇÃO - SUGESTÕES
 // ============================================
+let sugOrdem = null; // null = usa o padrão do perfil
+
+function ordenarSugestoes(lista, isAdmin) {
+    const ordem = sugOrdem || (isAdmin ? 'mais_votadas' : 'nao_votados');
+    const arr = [...lista];
+    const v = (s) => votosDaSugestao(s.id);
+    const ativos = cache.totalAtivos || 0;
+    arr.sort((a, b) => {
+        const va = v(a), vb = v(b);
+        switch (ordem) {
+            case 'mais_votadas':
+                // admin: total (apoio+rejeição); colaborador: só apoios
+                return (isAdmin ? vb.total - va.total : vb.apoios - va.apoios) || vb.apoios - va.apoios;
+            case 'mais_apoiadas':
+                return vb.apoios - va.apoios;
+            case 'aprov_votantes':
+                return (vb.total ? vb.apoios / vb.total : 0) - (va.total ? va.apoios / va.total : 0);
+            case 'aprov_time':
+                return (ativos ? vb.apoios / ativos : 0) - (ativos ? va.apoios / ativos : 0);
+            case 'categoria':
+                return (a.categorias?.nome || 'zzz').localeCompare(b.categorias?.nome || 'zzz') || a.nome.localeCompare(b.nome);
+            case 'alfabetica':
+                return a.nome.localeCompare(b.nome);
+            case 'nao_votados':
+                // não votados primeiro; depois por apoios
+                return (va.meuVoto ? 1 : 0) - (vb.meuVoto ? 1 : 0) || vb.apoios - va.apoios;
+            case 'data':
+            default:
+                return new Date(b.created_at) - new Date(a.created_at);
+        }
+    });
+    return arr;
+}
+
 function renderSugestoes() {
     const isAdmin = currentProfile?.role === 'admin';
-    const pendentes = cache.sugestoes.filter(s => s.status === 'pendente');
+    const pendentes = ordenarSugestoes(cache.sugestoes.filter(s => s.status === 'pendente'), isAdmin);
     const outras = cache.sugestoes.filter(s => s.status !== 'pendente');
-    
+    const ordemAtual = sugOrdem || (isAdmin ? 'mais_votadas' : 'nao_votados');
+
     return `
         <div class="page-header">
             <div class="page-header-row">
@@ -1163,21 +1238,39 @@ function renderSugestoes() {
                 </div>
             </div>
         </div>
-        
+
         ${pendentes.length > 0 ? `
+            <div class="card mb-4">
+                <div class="config-item">
+                    <label>Ordenar por</label>
+                    <select class="form-input" onchange="setSugOrdem(this.value)">
+                        <option value="mais_votadas" ${ordemAtual === 'mais_votadas' ? 'selected' : ''}>Mais votadas</option>
+                        <option value="mais_apoiadas" ${ordemAtual === 'mais_apoiadas' ? 'selected' : ''}>Mais apoiadas</option>
+                        ${isAdmin ? `
+                        <option value="aprov_votantes" ${ordemAtual === 'aprov_votantes' ? 'selected' : ''}>Maior aprovação (votantes)</option>
+                        <option value="aprov_time" ${ordemAtual === 'aprov_time' ? 'selected' : ''}>Maior aprovação (time)</option>
+                        ` : ''}
+                        <option value="nao_votados" ${ordemAtual === 'nao_votados' ? 'selected' : ''}>Não votados primeiro</option>
+                        <option value="data" ${ordemAtual === 'data' ? 'selected' : ''}>Data</option>
+                        <option value="categoria" ${ordemAtual === 'categoria' ? 'selected' : ''}>Categoria</option>
+                        <option value="alfabetica" ${ordemAtual === 'alfabetica' ? 'selected' : ''}>Ordem alfabética</option>
+                    </select>
+                </div>
+            </div>
+
             <div class="card">
                 <div class="card-title">📬 Pendentes</div>
-                ${pendentes.map(s => renderSugestaoItem(s, isAdmin)).join('')}
+                ${pendentes.map(s => renderSugestaoItem(s, true)).join('')}
             </div>
         ` : ''}
-        
+
         ${outras.length > 0 ? `
             <div class="card">
                 <div class="card-title">📋 Histórico</div>
                 ${outras.map(s => renderSugestaoItem(s, false)).join('')}
             </div>
         ` : ''}
-        
+
         ${cache.sugestoes.length === 0 ? `
             <div class="empty-state">
                 <div class="icon">💡</div>
@@ -1189,32 +1282,67 @@ function renderSugestoes() {
     `;
 }
 
-function renderSugestaoItem(s, showActions) {
+function setSugOrdem(v) { sugOrdem = v; renderPage(); }
+
+function renderSugestaoItem(s, pendente) {
+    const isAdmin = currentProfile?.role === 'admin';
     const statusBadge = {
         pendente: '<span class="badge badge-warning">Pendente</span>',
         aprovada: '<span class="badge badge-success">Aprovada</span>',
         recusada: '<span class="badge badge-danger">Recusada</span>',
         comprada: '<span class="badge badge-success">✓ Comprada</span>'
     };
-    
+
+    const vt = votosDaSugestao(s.id);
+    const ativos = cache.totalAtivos || 0;
+    const pctVotantesApoio = vt.total ? Math.round((vt.apoios / vt.total) * 100) : 0;
+    const pctVotantesRej = vt.total ? Math.round((vt.rejeicoes / vt.total) * 100) : 0;
+    const pctPartic = ativos ? Math.round((vt.total / ativos) * 100) : 0;
+    const pctAprovTime = ativos ? Math.round((vt.apoios / ativos) * 100) : 0;
+
+    // Botões de voto (todos votam nas pendentes)
+    const votoBtns = pendente ? `
+        <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+            <button class="btn btn-sm" onclick="votarSugestao(${s.id}, 'apoiar')"
+                style="padding:6px 10px; background:${vt.meuVoto === 'apoiar' ? 'var(--success)' : 'var(--gray-100,#eee)'}; color:${vt.meuVoto === 'apoiar' ? '#fff' : 'var(--success)'}; border:1px solid var(--success);">
+                👍 ${vt.apoios}
+            </button>
+            <button class="btn btn-sm" onclick="votarSugestao(${s.id}, 'rejeitar')"
+                style="padding:6px 10px; background:${vt.meuVoto === 'rejeitar' ? 'var(--danger)' : 'var(--gray-100,#eee)'}; color:${vt.meuVoto === 'rejeitar' ? '#fff' : 'var(--danger)'}; border:1px solid var(--danger);">
+                👎 ${isAdmin ? vt.rejeicoes : ''}
+            </button>
+        </div>` : '';
+
+    // Painel de métricas (só admin, só pendentes)
+    const painel = (pendente && isAdmin) ? `
+        <div style="margin-top:8px; font-size:12px; color:var(--gray-600); line-height:1.6;">
+            <span style="color:var(--success); font-weight:600;">👍 ${vt.apoios} (${pctVotantesApoio}%)</span>
+            &nbsp;·&nbsp;
+            <span style="color:var(--danger); font-weight:600;">👎 ${vt.rejeicoes} (${pctVotantesRej}%)</span><br>
+            Total: ${vt.total} votos (${pctPartic}% de participação)<br>
+            Aprovação dos votantes: ${pctVotantesApoio}% · Aprovação do time: ${pctAprovTime}%
+        </div>` : '';
+
+    // Decisão do admin
+    const decisao = (pendente && isAdmin) ? `
+        <div style="margin-top: 8px; display: flex; gap: 8px;">
+            <button class="btn btn-success btn-sm" onclick="respondSugestao(${s.id}, 'aprovada')" style="padding: 6px 12px;">Aprovar</button>
+            <button class="btn btn-danger btn-sm" onclick="respondSugestao(${s.id}, 'recusada')" style="padding: 6px 12px;">Recusar</button>
+        </div>` : '';
+
     return `
-        <div class="list-item" style="cursor: default;">
+        <div class="list-item" style="cursor: default; align-items:flex-start;">
             <div class="list-item-icon">${s.categorias?.icone || '📦'}</div>
             <div class="list-item-content">
-                <div class="list-item-title">${s.nome}</div>
+                <div class="list-item-title">${s.nome} ${!pendente ? statusBadge[s.status] : ''}</div>
                 <div class="list-item-subtitle">
                     ${s.profiles?.nome || 'Usuário'} • ${formatDate(s.created_at)}
                     ${s.justificativa ? `<br><em>"${s.justificativa}"</em>` : ''}
+                    ${!pendente ? `<br><span style="color:var(--success);">👍 ${vt.apoios}</span>` : ''}
                 </div>
-            </div>
-            <div class="list-item-right">
-                ${statusBadge[s.status]}
-                ${showActions ? `
-                    <div style="margin-top: 8px; display: flex; gap: 8px;">
-                        <button class="btn btn-success btn-sm" onclick="respondSugestao(${s.id}, 'aprovada')" style="padding: 6px 12px;">✓</button>
-                        <button class="btn btn-danger btn-sm" onclick="respondSugestao(${s.id}, 'recusada')" style="padding: 6px 12px;">✗</button>
-                    </div>
-                ` : ''}
+                ${votoBtns}
+                ${painel}
+                ${decisao}
             </div>
         </div>
     `;
@@ -2710,6 +2838,11 @@ function openSugestaoModal() {
             <label>Justificativa</label>
             <input type="text" id="sugestao-justificativa" class="form-input" placeholder="Por que você sugere este produto?">
         </div>
+        
+        <label style="display:flex; align-items:center; gap:8px; font-size:14px; cursor:pointer;">
+            <input type="checkbox" id="sugestao-apoiar" checked style="width:18px; height:18px;">
+            Já apoiar esta sugestão (👍)
+        </label>
     `;
     
     const footer = `
@@ -2734,7 +2867,8 @@ async function submitSugestao() {
     if (!userId) { showToast('Sua sessão expirou. Faça login novamente.', 'error'); return; }
     
     try {
-        const { error } = await supabaseClient
+        const apoiar = document.getElementById('sugestao-apoiar')?.checked;
+        const { data: nova, error } = await supabaseClient
             .from('sugestoes')
             .insert({
                 nome,
@@ -2742,11 +2876,19 @@ async function submitSugestao() {
                 justificativa: justificativa || null,
                 user_id: userId,
                 status: 'pendente'
-            });
+            })
+            .select()
+            .single();
         
         if (error) {
             console.error('Erro Supabase submitSugestao:', error);
             throw error;
+        }
+
+        // Voto de apoio opcional do próprio autor
+        if (apoiar && nova) {
+            await supabaseClient.from('votos_sugestao')
+                .upsert({ sugestao_id: nova.id, user_id: userId, tipo: 'apoiar' }, { onConflict: 'sugestao_id,user_id' });
         }
         
         showToast('Sugestão enviada!', 'success');
