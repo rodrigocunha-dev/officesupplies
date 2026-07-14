@@ -1327,9 +1327,12 @@ function sugMeta(s, isAdmin) {
     const cor = parado ? 'var(--danger)' : 'var(--gray-500)';
     const peso = parado ? '600' : '400';
     const dataFmt = new Date(s.created_at).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-    return `<div style="font-size:12px; color:var(--gray-500);">
-        ${s.categorias?.nome ? `<span>${s.categorias.icone || '📦'} ${s.categorias.nome}</span> • ` : ''}${s.profiles?.nome || 'Usuário'}<br>
-        ${dataFmt} • <span style="color:${cor}; font-weight:${peso};">há ${dias} ${dias === 1 ? 'dia' : 'dias'}${parado ? ' ⚠️' : ''}</span>
+    const unid = (txt, extra = '') => `<span style="white-space:nowrap; ${extra}">${txt}</span>`;
+    return `<div style="display:flex; flex-wrap:wrap; gap:2px 10px; font-size:12px; color:var(--gray-500);">
+        ${s.categorias?.nome ? unid(`${s.categorias.icone || '📦'} ${s.categorias.nome}`) : ''}
+        ${unid(s.profiles?.nome || 'Usuário')}
+        ${unid(dataFmt)}
+        ${unid(`há ${dias} ${dias === 1 ? 'dia' : 'dias'}${parado ? ' ⚠️' : ''}`, `color:${cor}; font-weight:${peso};`)}
     </div>`;
 }
 
@@ -1337,23 +1340,24 @@ function sugVotoBotoes(s, isAdmin) {
     const vt = votosDaSugestao(s.id);
     return `
         <button class="btn btn-sm" onclick="votarSugestao(${s.id}, 'apoiar')"
-            style="height:32px; padding:0 8px; font-size:12px; background:${vt.meuVoto === 'apoiar' ? 'var(--success)' : 'transparent'}; color:${vt.meuVoto === 'apoiar' ? '#fff' : 'var(--success)'}; border:1px solid var(--success);">
+            style="height:32px; padding:0 10px; font-size:12px; background:${vt.meuVoto === 'apoiar' ? 'var(--success)' : 'transparent'}; color:${vt.meuVoto === 'apoiar' ? '#fff' : 'var(--success)'}; border:1px solid var(--success);">
             👍 ${vt.apoios}
         </button>
         <button class="btn btn-sm" onclick="votarSugestao(${s.id}, 'rejeitar')"
-            style="height:32px; padding:0 8px; font-size:12px; background:${vt.meuVoto === 'rejeitar' ? 'var(--danger)' : 'transparent'}; color:${vt.meuVoto === 'rejeitar' ? '#fff' : 'var(--danger)'}; border:1px solid var(--danger);">
+            style="height:32px; padding:0 10px; font-size:12px; background:${vt.meuVoto === 'rejeitar' ? 'var(--danger)' : 'transparent'}; color:${vt.meuVoto === 'rejeitar' ? '#fff' : 'var(--danger)'}; border:1px solid var(--danger);">
             👎${isAdmin ? ' ' + vt.rejeicoes : ''}
         </button>`;
 }
 
 function sugDecisao(s) {
     return `
-        <button class="btn btn-success btn-sm" onclick="respondSugestao(${s.id}, 'aprovada')" title="Aprovar" style="width:32px; height:32px; padding:0; font-size:14px;">✓</button>
-        <button class="btn btn-danger btn-sm" onclick="respondSugestao(${s.id}, 'recusada')" title="Recusar" style="width:32px; height:32px; padding:0; font-size:14px;">✗</button>`;
+        <button class="btn btn-success btn-sm" onclick="respondSugestao(${s.id}, 'aprovada')" title="Aprovar" style="height:32px; padding:0 12px; font-size:13px;">✓</button>
+        <button class="btn btn-danger btn-sm" onclick="respondSugestao(${s.id}, 'recusada')" title="Recusar" style="height:32px; padding:0 12px; font-size:13px;">✗</button>`;
 }
 
-// Métricas em quadro vertical (blocos)
-function sugPainelMetricas(s) {
+// Quadro de métricas (usado em lista e blocos): apoio/rejeição em cima,
+// participação/aprovação em negrito logo abaixo (mesmo tamanho).
+function sugMetricas(s) {
     const vt = votosDaSugestao(s.id);
     const ativos = cache.totalAtivos || 0;
     const pctApoio = vt.total ? Math.round((vt.apoios / vt.total) * 100) : 0;
@@ -1361,31 +1365,13 @@ function sugPainelMetricas(s) {
     const pctPartic = ativos ? Math.round((vt.total / ativos) * 100) : 0;
     const pctTime = ativos ? Math.round((vt.apoios / ativos) * 100) : 0;
     return `
-        <div style="background:var(--gray-100,#f5f5f5); border-radius:10px; padding:8px 10px; font-size:12px; line-height:1.6;">
-            <div style="font-size:14px;">
+        <div style="background:var(--gray-100,#f5f5f5); border-radius:8px; padding:6px 10px; font-size:13px; line-height:1.5;">
+            <div>
                 <span style="color:var(--success); font-weight:700;">👍 ${vt.apoios} (${pctApoio}%)</span>
                 &nbsp;·&nbsp;
                 <span style="color:var(--danger); font-weight:700;">👎 ${vt.rejeicoes} (${pctRej}%)</span>
             </div>
-            <div style="color:var(--gray-600);">${vt.total} votos · part. ${pctPartic}%</div>
-            <div style="color:var(--gray-600);">aprov: votantes ${pctApoio}% · time ${pctTime}%</div>
-        </div>`;
-}
-
-// Métricas em faixa horizontal compacta (lista)
-function sugMetricasFaixa(s) {
-    const vt = votosDaSugestao(s.id);
-    const ativos = cache.totalAtivos || 0;
-    const pctApoio = vt.total ? Math.round((vt.apoios / vt.total) * 100) : 0;
-    const pctRej = vt.total ? Math.round((vt.rejeicoes / vt.total) * 100) : 0;
-    const pctPartic = ativos ? Math.round((vt.total / ativos) * 100) : 0;
-    const pctTime = ativos ? Math.round((vt.apoios / ativos) * 100) : 0;
-    return `
-        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:var(--gray-100,#f5f5f5); border-radius:8px; padding:5px 10px; font-size:12px;">
-            <span style="color:var(--success); font-weight:700;">👍 ${vt.apoios} (${pctApoio}%)</span>
-            <span style="color:var(--danger); font-weight:700;">👎 ${vt.rejeicoes} (${pctRej}%)</span>
-            <span style="color:var(--gray-600);">${vt.total}v · part. ${pctPartic}%</span>
-            <span style="color:var(--gray-600);">aprov. time ${pctTime}%</span>
+            <div style="font-weight:700; color:var(--gray-700,#444);">${vt.total}v · part. ${pctPartic}% · aprov. time ${pctTime}%</div>
         </div>`;
 }
 
@@ -1400,42 +1386,42 @@ function renderSugestaoItem(s, pendente) {
     };
     const vt = votosDaSugestao(s.id);
 
-    const titulo = `<div style="font-weight:600; font-size:14px;">${s.nome} ${!pendente ? statusBadge[s.status] : ''}</div>`;
+    const titulo = `<span style="font-weight:600; font-size:14px;">${s.nome} ${!pendente ? statusBadge[s.status] : ''}</span>`;
     const justi = s.justificativa ? `<div style="font-size:12px; color:var(--gray-600); margin-top:2px;"><em>"${s.justificativa}"</em></div>` : '';
     const votos = pendente ? sugVotoBotoes(s, isAdmin) : `<span style="font-size:13px; color:var(--success);">👍 ${vt.apoios}</span>`;
 
     if (view === 'blocos') {
-        const painel = (pendente && isAdmin) ? `<div style="margin-top:8px;">${sugPainelMetricas(s)}</div>` : '';
         return `
             <div class="card" style="margin:0; padding:${isAdmin ? '14px' : '10px'};">
-                ${titulo}
+                <div>${titulo}</div>
                 ${sugMeta(s, isAdmin)}
                 ${justi}
-                ${painel}
-                <div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                ${(pendente && isAdmin) ? `<div style="margin-top:8px;">${sugMetricas(s)}</div>` : ''}
+                <div style="margin-top:8px; display:flex; gap:6px; align-items:center;">
                     ${votos}
-                    ${(pendente && isAdmin) ? sugDecisao(s) : ''}
                 </div>
+                ${(pendente && isAdmin) ? `<div style="margin-top:6px; display:flex; gap:6px; align-items:center;">${sugDecisao(s)}</div>` : ''}
             </div>`;
     }
 
-    // Lista (adaptável: quebra para baixo em telas estreitas)
+    // Lista (adaptável: quebra whole-units em telas estreitas)
     const acoes = pendente ? `
         <div style="display:flex; gap:6px; align-items:center; flex-shrink:0;">
             ${votos}
             ${isAdmin ? sugDecisao(s) : ''}
         </div>` : `<div style="flex-shrink:0;">${votos}</div>`;
 
-    const faixa = (pendente && isAdmin) ? `<div style="flex:1; min-width:200px;">${sugMetricasFaixa(s)}</div>` : '';
+    const faixa = (pendente && isAdmin) ? `<div style="flex:1; min-width:220px;">${sugMetricas(s)}</div>` : '';
+
+    // Admin: nome acima da meta. Colaborador: nome + meta lado a lado (linha mais baixa).
+    const bloco = isAdmin
+        ? `<div style="flex:1; min-width:180px;"><div>${titulo}</div>${sugMeta(s, isAdmin)}${justi}</div>`
+        : `<div style="flex:1; min-width:180px; display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 12px;">${titulo}${sugMeta(s, isAdmin)}${justi}</div>`;
 
     return `
         <div class="list-item" style="cursor:default; gap:8px; flex-wrap:wrap; align-items:center;">
             <div class="list-item-icon">${s.categorias?.icone || '📦'}</div>
-            <div style="flex:1; min-width:150px;">
-                ${titulo}
-                ${sugMeta(s, isAdmin)}
-                ${justi}
-            </div>
+            ${bloco}
             ${faixa}
             ${acoes}
         </div>`;
