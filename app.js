@@ -1336,10 +1336,11 @@ function sugMeta(s, isAdmin, view) {
     const autorTxt = isAdmin ? `<span style="white-space:nowrap;">(${s.profiles?.nome || 'Usuário'})</span>` : '';
     const linha1 = [catTxt, autorTxt].filter(Boolean).join(' ');
 
-    // Em blocos: categoria e data sempre em linhas separadas (padrão visual)
+    // Em blocos: categoria e data sempre em linhas separadas (padrão visual).
+    // Se não houver categoria, o espaço é reservado em branco para alinhar os cards.
     if (view === 'blocos') {
         return `<div style="font-size:12px; color:var(--gray-500); line-height:1.5;">
-            ${linha1 ? `<div>${linha1}</div>` : ''}
+            <div>${linha1 || '&nbsp;'}</div>
             <div>${dataDias}</div>
         </div>`;
     }
@@ -1372,7 +1373,7 @@ function sugDecisao(s) {
 
 // Quadro de métricas (usado em lista e blocos): apoio/rejeição em cima,
 // participação/aprovação em negrito logo abaixo (mesmo tamanho).
-function sugMetricas(s) {
+function sugMetricas(s, view) {
     const vt = votosDaSugestao(s.id);
     const ativos = cache.totalAtivos || 0;
     const pctApoio = vt.total ? Math.round((vt.apoios / vt.total) * 100) : 0;
@@ -1380,6 +1381,18 @@ function sugMetricas(s) {
     const pctPartic = ativos ? Math.round((vt.total / ativos) * 100) : 0;
     const pctTime = ativos ? Math.round((vt.apoios / ativos) * 100) : 0;
     const nw = 'white-space:nowrap;';
+    const bold = 'font-weight:700; color:var(--gray-700,#444);';
+
+    const votosTxt = `<span style="${nw}">${vt.total} ${vt.total === 1 ? 'voto' : 'votos'}</span>`;
+    const particTxt = `<span style="${nw}">Participação ${pctPartic}%</span>`;
+    const timeTxt = `<span style="${nw}">Aprovação time ${pctTime}%</span>`;
+
+    // Lista: 2 linhas (há espaço horizontal). Blocos: 3 linhas (espaço vertical).
+    const detalhe = (view === 'blocos')
+        ? `<div style="${bold}">${votosTxt} &nbsp;·&nbsp; ${particTxt}</div>
+           <div style="${bold}">${timeTxt}</div>`
+        : `<div style="${bold}">${votosTxt} &nbsp;·&nbsp; ${particTxt} &nbsp;·&nbsp; ${timeTxt}</div>`;
+
     return `
         <div style="display:inline-block; background:var(--gray-100,#f5f5f5); border-radius:8px; padding:5px 10px; font-size:13px; line-height:1.4;">
             <div>
@@ -1387,14 +1400,7 @@ function sugMetricas(s) {
                 &nbsp;·&nbsp;
                 <span style="${nw} color:var(--danger); font-weight:700;">👎 ${vt.rejeicoes} (${pctRej}%)</span>
             </div>
-            <div style="font-weight:700; color:var(--gray-700,#444);">
-                <span style="${nw}">${vt.total} ${vt.total === 1 ? 'voto' : 'votos'}</span>
-                &nbsp;·&nbsp;
-                <span style="${nw}">Participação ${pctPartic}%</span>
-            </div>
-            <div style="font-weight:700; color:var(--gray-700,#444);">
-                <span style="${nw}">Aprovação time ${pctTime}%</span>
-            </div>
+            ${detalhe}
         </div>`;
 }
 
@@ -1419,7 +1425,7 @@ function renderSugestaoItem(s, pendente) {
                 <div>${titulo}</div>
                 ${sugMeta(s, isAdmin, view)}
                 ${justi}
-                ${(pendente && isAdmin) ? `<div style="margin-top:8px;">${sugMetricas(s)}</div>` : ''}
+                ${(pendente && isAdmin) ? `<div style="margin-top:8px;">${sugMetricas(s, view)}</div>` : ''}
                 <div style="margin-top:8px; display:flex; gap:6px; align-items:center;">
                     ${votos}
                 </div>
@@ -1435,7 +1441,7 @@ function renderSugestaoItem(s, pendente) {
         </div>` : `<div style="flex-shrink:0;">${votos}</div>`;
 
     // Quadro de métricas encolhe para caber o conteúdo (não estica)
-    const faixa = (pendente && isAdmin) ? `<div style="flex:0 0 auto;">${sugMetricas(s)}</div>` : '';
+    const faixa = (pendente && isAdmin) ? `<div style="flex:0 0 auto;">${sugMetricas(s, view)}</div>` : '';
 
     // Admin: nome acima da meta. Colaborador: nome + meta lado a lado (linha mais baixa).
     const bloco = isAdmin
