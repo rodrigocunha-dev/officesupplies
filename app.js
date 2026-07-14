@@ -1319,7 +1319,7 @@ function renderSugestoes() {
 function setSugOrdem(v) { sugOrdem = v; renderPage(); }
 
 // Peças reutilizáveis do item de sugestão
-function sugMeta(s, isAdmin) {
+function sugMeta(s, isAdmin, view) {
     const dias = diasParado(s.created_at);
     const cfg = cache.config || {};
     const limite = cfg.sugestaoAlertaDias != null ? cfg.sugestaoAlertaDias : 15;
@@ -1327,12 +1327,27 @@ function sugMeta(s, isAdmin) {
     const cor = parado ? 'var(--danger)' : 'var(--gray-500)';
     const peso = parado ? '600' : '400';
     const dataFmt = new Date(s.created_at).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-    const unid = (txt, extra = '') => `<span style="white-space:nowrap; ${extra}">${txt}</span>`;
+
+    // Data + contagem = informação única, nunca quebra no meio
+    const dataDias = `<span style="white-space:nowrap; color:${cor}; font-weight:${peso};">${dataFmt} (há ${dias} ${dias === 1 ? 'dia' : 'dias'})${parado ? ' ⚠️' : ''}</span>`;
+
+    // Categoria + autor (autor só para admin, entre parênteses)
+    const catTxt = s.categorias?.nome ? `<span style="white-space:nowrap;">${s.categorias.icone || '📦'} ${s.categorias.nome}</span>` : '';
+    const autorTxt = isAdmin ? `<span style="white-space:nowrap;">(${s.profiles?.nome || 'Usuário'})</span>` : '';
+    const linha1 = [catTxt, autorTxt].filter(Boolean).join(' ');
+
+    // Em blocos: categoria e data sempre em linhas separadas (padrão visual)
+    if (view === 'blocos') {
+        return `<div style="font-size:12px; color:var(--gray-500); line-height:1.5;">
+            ${linha1 ? `<div>${linha1}</div>` : ''}
+            <div>${dataDias}</div>
+        </div>`;
+    }
+
+    // Em lista: fluem lado a lado, quebrando por unidades inteiras
     return `<div style="display:flex; flex-wrap:wrap; gap:2px 10px; font-size:12px; color:var(--gray-500);">
-        ${s.categorias?.nome ? unid(`${s.categorias.icone || '📦'} ${s.categorias.nome}`) : ''}
-        ${unid(s.profiles?.nome || 'Usuário')}
-        ${unid(dataFmt)}
-        ${unid(`há ${dias} ${dias === 1 ? 'dia' : 'dias'}${parado ? ' ⚠️' : ''}`, `color:${cor}; font-weight:${peso};`)}
+        ${linha1}
+        ${dataDias}
     </div>`;
 }
 
@@ -1364,14 +1379,22 @@ function sugMetricas(s) {
     const pctRej = vt.total ? Math.round((vt.rejeicoes / vt.total) * 100) : 0;
     const pctPartic = ativos ? Math.round((vt.total / ativos) * 100) : 0;
     const pctTime = ativos ? Math.round((vt.apoios / ativos) * 100) : 0;
+    const nw = 'white-space:nowrap;';
     return `
-        <div style="background:var(--gray-100,#f5f5f5); border-radius:8px; padding:6px 10px; font-size:13px; line-height:1.5;">
+        <div style="display:inline-block; background:var(--gray-100,#f5f5f5); border-radius:8px; padding:5px 10px; font-size:13px; line-height:1.4;">
             <div>
-                <span style="color:var(--success); font-weight:700;">👍 ${vt.apoios} (${pctApoio}%)</span>
+                <span style="${nw} color:var(--success); font-weight:700;">👍 ${vt.apoios} (${pctApoio}%)</span>
                 &nbsp;·&nbsp;
-                <span style="color:var(--danger); font-weight:700;">👎 ${vt.rejeicoes} (${pctRej}%)</span>
+                <span style="${nw} color:var(--danger); font-weight:700;">👎 ${vt.rejeicoes} (${pctRej}%)</span>
             </div>
-            <div style="font-weight:700; color:var(--gray-700,#444);">${vt.total}v · part. ${pctPartic}% · aprov. time ${pctTime}%</div>
+            <div style="font-weight:700; color:var(--gray-700,#444);">
+                <span style="${nw}">${vt.total} ${vt.total === 1 ? 'voto' : 'votos'}</span>
+                &nbsp;·&nbsp;
+                <span style="${nw}">Participação ${pctPartic}%</span>
+            </div>
+            <div style="font-weight:700; color:var(--gray-700,#444);">
+                <span style="${nw}">Aprovação time ${pctTime}%</span>
+            </div>
         </div>`;
 }
 
@@ -1394,7 +1417,7 @@ function renderSugestaoItem(s, pendente) {
         return `
             <div class="card" style="margin:0; padding:${isAdmin ? '14px' : '10px'};">
                 <div>${titulo}</div>
-                ${sugMeta(s, isAdmin)}
+                ${sugMeta(s, isAdmin, view)}
                 ${justi}
                 ${(pendente && isAdmin) ? `<div style="margin-top:8px;">${sugMetricas(s)}</div>` : ''}
                 <div style="margin-top:8px; display:flex; gap:6px; align-items:center;">
@@ -1404,23 +1427,24 @@ function renderSugestaoItem(s, pendente) {
             </div>`;
     }
 
-    // Lista (adaptável: quebra whole-units em telas estreitas)
+    // Lista (adaptável: quebra por unidades inteiras em telas estreitas)
     const acoes = pendente ? `
         <div style="display:flex; gap:6px; align-items:center; flex-shrink:0;">
             ${votos}
             ${isAdmin ? sugDecisao(s) : ''}
         </div>` : `<div style="flex-shrink:0;">${votos}</div>`;
 
-    const faixa = (pendente && isAdmin) ? `<div style="flex:1; min-width:220px;">${sugMetricas(s)}</div>` : '';
+    // Quadro de métricas encolhe para caber o conteúdo (não estica)
+    const faixa = (pendente && isAdmin) ? `<div style="flex:0 0 auto;">${sugMetricas(s)}</div>` : '';
 
     // Admin: nome acima da meta. Colaborador: nome + meta lado a lado (linha mais baixa).
     const bloco = isAdmin
-        ? `<div style="flex:1; min-width:180px;"><div>${titulo}</div>${sugMeta(s, isAdmin)}${justi}</div>`
-        : `<div style="flex:1; min-width:180px; display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 12px;">${titulo}${sugMeta(s, isAdmin)}${justi}</div>`;
+        ? `<div style="flex:1; min-width:180px;"><div>${titulo}</div>${sugMeta(s, isAdmin, view)}${justi}</div>`
+        : `<div style="flex:1; min-width:180px; display:flex; flex-wrap:wrap; align-items:center; gap:2px 12px;">${titulo}${sugMeta(s, isAdmin, view)}${justi}</div>`;
 
     return `
-        <div class="list-item" style="cursor:default; gap:8px; flex-wrap:wrap; align-items:center;">
-            <div class="list-item-icon">${s.categorias?.icone || '📦'}</div>
+        <div class="list-item" style="cursor:default; gap:8px; flex-wrap:wrap; align-items:center; ${isAdmin ? '' : 'padding-top:8px; padding-bottom:8px;'}">
+            <div class="list-item-icon"${isAdmin ? '' : ' style="width:32px; height:32px; font-size:18px;"'}>${s.categorias?.icone || '📦'}</div>
             ${bloco}
             ${faixa}
             ${acoes}
