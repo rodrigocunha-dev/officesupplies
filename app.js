@@ -521,7 +521,18 @@ async function loadSugestoes() {
         if (error) throw error;
         cache.sugestoes = data || [];
 
-        // Votos das sugestões
+        // Contagens de votos: vêm da view `votos_resumo`.
+        // Ela entrega apoios para todos e rejeições só para admin (null caso contrário).
+        const { data: resumo } = await supabaseClient.from('votos_resumo').select('*');
+        cache.votosResumo = {};
+        (resumo || []).forEach(r => {
+            cache.votosResumo[r.sugestao_id] = {
+                apoios: r.apoios || 0,
+                rejeicoes: r.rejeicoes // null para colaborador
+            };
+        });
+
+        // Voto do próprio usuário (o RLS só devolve o dele; admin recebe todos)
         const { data: votos } = await supabaseClient.from('votos_sugestao').select('*');
         cache.votosSugestao = votos || [];
 
@@ -535,11 +546,22 @@ async function loadSugestoes() {
 }
 
 function votosDaSugestao(sugId) {
-    const votos = (cache.votosSugestao || []).filter(v => v.sugestao_id === sugId);
-    const apoios = votos.filter(v => v.tipo === 'apoiar').length;
-    const rejeicoes = votos.filter(v => v.tipo === 'rejeitar').length;
-    const meu = votos.find(v => v.user_id === currentUser?.id);
-    return { apoios, rejeicoes, total: apoios + rejeicoes, meuVoto: meu ? meu.tipo : null };
+    // Contagens vêm do resumo (o banco decide o que cada papel pode ver)
+    const r = (cache.votosResumo || {})[sugId] || { apoios: 0, rejeicoes: null };
+    const apoios = r.apoios || 0;
+    const rejeicoes = (typeof r.rejeicoes === 'number') ? r.rejeicoes : 0;
+    const temRejeicoes = (typeof r.rejeicoes === 'number'); // false = colaborador (não vê)
+
+    // O próprio voto vem da tabela (o RLS devolve só o dele)
+    const meu = (cache.votosSugestao || []).find(v => v.sugestao_id === sugId && v.user_id === currentUser?.id);
+
+    return {
+        apoios,
+        rejeicoes,
+        temRejeicoes,
+        total: apoios + rejeicoes,
+        meuVoto: meu ? meu.tipo : null
+    };
 }
 
 async function votarSugestao(sugId, tipo) {
